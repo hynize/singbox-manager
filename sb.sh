@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox Manager"
-SCRIPT_VERSION="0.2.0"
+SCRIPT_VERSION="0.2.1"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -199,7 +199,7 @@ install_release_bundle() {
   download_file "${checksums_url}" "${checksums_file}"
   download_file "${bundle_url}" "${bundle_file}"
 
-  expected="$(awk -v file="${bundle_name}" '$2 == file {print $1}' "${checksums_file}")"
+  expected="$(awk -v file="${bundle_name}" '{ sub(/\r$/, "", $2); if ($2 == file) print $1 }' "${checksums_file}")"
   [ -n "${expected}" ] || fatal "Could not find checksum for ${bundle_name}"
   verify_sha256 "${bundle_file}" "${expected}"
 
