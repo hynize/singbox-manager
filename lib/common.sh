@@ -34,7 +34,7 @@ print_ok() {
 }
 
 print_warn() {
-  echo -e "${COLOR_YELLOW}[WARN]${COLOR_RESET} $*"
+  echo -e "${COLOR_YELLOW}[WARN]${COLOR_RESET} $*" >&2
 }
 
 print_err() {
