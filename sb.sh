@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox Manager"
-SCRIPT_VERSION="0.2.1"
+SCRIPT_VERSION="0.2.2"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -1119,7 +1119,7 @@ select_node_tag() {
   idx=1
   for row in "${rows[@]}"; do
     IFS=$'\t' read -r tag protocol name port <<< "${row}"
-    echo "${idx}. ${name} | ${protocol} | port: ${port}"
+    printf '%s\n' "${idx}. ${name} | ${protocol} | port: ${port}" >&2
     idx=$((idx + 1))
   done
 
