@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          curl -fsSL https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64 -o /tmp/shfmt
+          sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
+
+      - name: ShellCheck
+        run: shellcheck -e SC1091 install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
+
+      - name: Bash Syntax
+        run: bash -n install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
+
+      - name: Formatting
+        run: shfmt -d install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
+
+      - name: Build Bundle
+        run: bash scripts/build-release-bundle.sh
