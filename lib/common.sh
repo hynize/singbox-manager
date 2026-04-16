@@ -30,19 +30,19 @@ LOCK_FD=""
 LOCK_DIR_FALLBACK="${LOCK_FILE}.d"
 
 print_ok() {
-  echo -e "${COLOR_GREEN}[OK]${COLOR_RESET} $*"
+  echo -e "${COLOR_GREEN}[成功]${COLOR_RESET} $*"
 }
 
 print_warn() {
-  echo -e "${COLOR_YELLOW}[WARN]${COLOR_RESET} $*" >&2
+  echo -e "${COLOR_YELLOW}[警告]${COLOR_RESET} $*" >&2
 }
 
 print_err() {
-  echo -e "${COLOR_RED}[ERR]${COLOR_RESET} $*" >&2
+  echo -e "${COLOR_RED}[错误]${COLOR_RESET} $*" >&2
 }
 
 print_info() {
-  echo -e "${COLOR_BLUE}[INFO]${COLOR_RESET} $*"
+  echo -e "${COLOR_BLUE}[信息]${COLOR_RESET} $*"
 }
 
 fatal() {
@@ -56,7 +56,7 @@ command_exists() {
 
 require_root() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    fatal "Please run as root."
+    fatal "请使用 root 用户运行。"
   fi
 }
 
@@ -69,7 +69,7 @@ handle_common_error() {
   local source_file="$1"
   local line_no="$2"
   local exit_code="$3"
-  print_err "Command failed at ${source_file}:${line_no}"
+  print_err "命令执行失败：${source_file}:${line_no}"
   release_lock
   exit "${exit_code}"
 }
@@ -82,7 +82,7 @@ download_file() {
   elif command_exists wget; then
     wget -qO "$out" "$url"
   else
-    fatal "curl or wget is required."
+    fatal "需要安装 curl 或 wget。"
   fi
 }
 
@@ -103,7 +103,7 @@ verify_sha256() {
   local actual
   actual="$(sha256_file "$target")"
   if [ "$actual" != "$expected" ]; then
-    fatal "SHA256 mismatch for ${target}: expected ${expected}, got ${actual}"
+    fatal "SHA256 校验失败：${target}，预期 ${expected}，实际 ${actual}"
   fi
 }
 
@@ -164,7 +164,7 @@ acquire_lock() {
     while ! flock -n "${LOCK_FD}"; do
       now="$(date +%s)"
       if [ $((now - start_time)) -ge "${LOCK_TIMEOUT}" ]; then
-        fatal "Could not acquire lock within ${LOCK_TIMEOUT}s"
+        fatal "在 ${LOCK_TIMEOUT} 秒内无法获取锁。"
       fi
       sleep 1
     done
@@ -172,7 +172,7 @@ acquire_lock() {
     while ! mkdir "${LOCK_DIR_FALLBACK}" 2>/dev/null; do
       now="$(date +%s)"
       if [ $((now - start_time)) -ge "${LOCK_TIMEOUT}" ]; then
-        fatal "Could not acquire lock within ${LOCK_TIMEOUT}s"
+        fatal "在 ${LOCK_TIMEOUT} 秒内无法获取锁。"
       fi
       sleep 1
     done
@@ -444,7 +444,7 @@ build_share_link() {
       ws_path="$(node_value "$tag" "ws_path")"
       preferred_domain="$(node_value "$tag" "preferred_domain")"
       endpoint_domain="$(node_value "$tag" "endpoint_domain")"
-      [ -n "$endpoint_domain" ] || endpoint_domain="pending.example.com"
+      [ -n "$endpoint_domain" ] || endpoint_domain="待分配.example.com"
       printf 'vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
         "$uuid" "$(wrap_host "$preferred_domain")" "$endpoint_domain" "$endpoint_domain" "$(url_encode "$ws_path")" "$(url_encode "$name")"
       ;;

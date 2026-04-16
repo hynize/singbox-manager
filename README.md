@@ -7,19 +7,19 @@
 发布版安装脚本：
 
 ```text
-https://github.com/hynize/singbox-manager/releases/download/v0.2.4/install.sh
+https://github.com/hynize/singbox-manager/releases/download/v0.2.5/install.sh
 ```
 
 快速安装：
 
 ```bash
-bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.4/install.sh)
+bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.5/install.sh)
 ```
 
 更安全的两步安装：
 
 ```bash
-curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.4/install.sh
+curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.5/install.sh
 bash install.sh
 ```
 
@@ -52,15 +52,15 @@ sbm
 主菜单：
 
 ```text
-1. Install/Update core
-2. Add node
-3. View nodes
-4. Delete node
-5. Restart services
-6. Status
-7. Update project files
-8. Uninstall
-0. Exit
+1. 安装/更新核心组件
+2. 添加节点
+3. 查看节点
+4. 删除节点
+5. 重启服务
+6. 查看状态
+7. 更新项目文件
+8. 卸载
+0. 退出
 ```
 
 添加节点子菜单：
@@ -73,7 +73,7 @@ sbm
 5. TUIC v5
 6. Hysteria2
 7. SOCKS5
-0. Back
+0. 返回
 ```
 
 ## 项目结构
@@ -118,8 +118,8 @@ sbm
 ### 安装链路
 
 - `install.sh` 不再直接拉取 `main` 分支脚本。
-- 安装器固定到发布版本 `v0.2.4`。
-- 安装内容来自 release bundle：`singbox-manager-v0.2.4.tar.gz`
+- 安装器固定到发布版本 `v0.2.5`。
+- 安装内容来自 release bundle：`singbox-manager-v0.2.5.tar.gz`
 - 安装器会对 bundle 做 SHA256 校验后再解包。
 
 ### 公共逻辑层

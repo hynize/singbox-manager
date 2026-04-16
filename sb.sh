@@ -3,8 +3,8 @@ set -eEuo pipefail
 
 umask 077
 
-PROJECT_NAME="Singbox Manager"
-SCRIPT_VERSION="0.2.4"
+PROJECT_NAME="Singbox 管理器"
+SCRIPT_VERSION="0.2.5"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -38,7 +38,7 @@ elif [ -f "${LIB_DIR}/common.sh" ]; then
   # shellcheck source=/usr/local/lib/singbox-manager/common.sh
   . "${LIB_DIR}/common.sh"
 else
-  echo "common.sh not found." >&2
+  echo "未找到 common.sh。" >&2
   exit 1
 fi
 
@@ -49,7 +49,7 @@ elif [ -f "${UPSTREAM_ENV}" ]; then
   # shellcheck source=/usr/local/lib/singbox-manager/upstream.env
   . "${UPSTREAM_ENV}"
 else
-  fatal "upstream.env not found."
+  fatal "未找到 upstream.env。"
 fi
 
 setup_common_traps
@@ -85,7 +85,7 @@ confirm_yes() {
   local prompt="$1"
   local answer
   read -r -p "${prompt} [y/N]: " answer
-  [[ "$answer" =~ ^[Yy]$ ]]
+  [[ "$answer" =~ ^([Yy]|[Yy][Ee][Ss]|是)$ ]]
 }
 
 prompt_choice() {
@@ -123,7 +123,7 @@ pkg_install() {
   elif command_exists zypper; then
     zypper --non-interactive install "$@"
   else
-    fatal "Unsupported package manager. Please install dependencies manually: $*"
+    fatal "暂不支持当前包管理器，请手动安装以下依赖：$*"
   fi
 }
 
@@ -167,7 +167,7 @@ verify_runtime_prereqs() {
   fi
 
   if [ "${#missing[@]}" -gt 0 ]; then
-    fatal "Missing required commands: ${missing[*]}"
+    fatal "缺少必要命令：${missing[*]}"
   fi
 }
 
@@ -181,11 +181,11 @@ ensure_binary_runs() {
   fi
 
   if command_exists apk; then
-    print_info "Installing gcompat for Alpine compatibility"
+    print_info "检测到 Alpine，正在安装 gcompat 兼容层"
     apk add --no-cache gcompat >/dev/null 2>&1
   fi
 
-  "$binary" "$@" >/dev/null 2>&1 || fatal "${label} is installed but cannot run on this system."
+  "$binary" "$@" >/dev/null 2>&1 || fatal "${label} 已安装，但当前系统无法运行。"
 }
 
 sync_project_assets_from_source() {
@@ -217,7 +217,7 @@ install_release_bundle() {
   download_file "${bundle_url}" "${bundle_file}"
 
   expected="$(awk -v file="${bundle_name}" '{ sub(/\r$/, "", $2); if ($2 == file) print $1 }' "${checksums_file}")"
-  [ -n "${expected}" ] || fatal "Could not find checksum for ${bundle_name}"
+  [ -n "${expected}" ] || fatal "未找到 ${bundle_name} 的校验值。"
   verify_sha256 "${bundle_file}" "${expected}"
 
   tar -xzf "${bundle_file}" -C "${tmpdir}"
@@ -233,44 +233,44 @@ install_release_bundle() {
 
 install_singbox_core() {
   local arch asset url tmpdir archive binary expected
-  arch="$(detect_arch)" || fatal "Unsupported CPU architecture: $(uname -m)"
+  arch="$(detect_arch)" || fatal "暂不支持当前 CPU 架构：$(uname -m)"
   asset="${SINGBOX_ASSET[$arch]:-}"
   expected="${SINGBOX_SHA256[$arch]:-}"
-  [ -n "${asset}" ] || fatal "No sing-box asset configured for ${arch}"
-  [ -n "${expected}" ] || fatal "No sing-box checksum configured for ${arch}"
+  [ -n "${asset}" ] || fatal "未配置 ${arch} 对应的 sing-box 安装包。"
+  [ -n "${expected}" ] || fatal "未配置 ${arch} 对应的 sing-box 校验值。"
 
   url="https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/${asset}"
   tmpdir="$(mktemp -d)"
   archive="${tmpdir}/${asset}"
-  print_info "Installing sing-box ${SINGBOX_VERSION} (${arch})"
+  print_info "正在安装 sing-box ${SINGBOX_VERSION} (${arch})"
   download_file "${url}" "${archive}"
   verify_sha256 "${archive}" "${expected}"
   tar -xzf "${archive}" -C "${tmpdir}"
   binary="$(find "${tmpdir}" -type f -name sing-box | head -n 1)"
-  [ -n "${binary}" ] || fatal "sing-box binary not found in archive"
+  [ -n "${binary}" ] || fatal "安装包中未找到 sing-box 可执行文件。"
   install -m 0755 "${binary}" "${SINGBOX_BIN}"
   ensure_binary_runs "${SINGBOX_BIN}" "sing-box" version
   rm -rf "${tmpdir}"
-  print_ok "sing-box installed to ${SINGBOX_BIN}"
+  print_ok "sing-box 已安装到 ${SINGBOX_BIN}"
 }
 
 install_cloudflared_bin() {
   local arch asset url tmpfile expected
-  arch="$(detect_arch)" || fatal "Unsupported CPU architecture: $(uname -m)"
+  arch="$(detect_arch)" || fatal "暂不支持当前 CPU 架构：$(uname -m)"
   asset="${CLOUDFLARED_ASSET[$arch]:-}"
   expected="${CLOUDFLARED_SHA256[$arch]:-}"
-  [ -n "${asset}" ] || fatal "No cloudflared asset configured for ${arch}"
-  [ -n "${expected}" ] || fatal "No cloudflared checksum configured for ${arch}"
+  [ -n "${asset}" ] || fatal "未配置 ${arch} 对应的 cloudflared 安装包。"
+  [ -n "${expected}" ] || fatal "未配置 ${arch} 对应的 cloudflared 校验值。"
 
   url="https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${asset}"
   tmpfile="$(mktemp)"
-  print_info "Installing cloudflared ${CLOUDFLARED_VERSION} (${arch})"
+  print_info "正在安装 cloudflared ${CLOUDFLARED_VERSION} (${arch})"
   download_file "${url}" "${tmpfile}"
   verify_sha256 "${tmpfile}" "${expected}"
   install -m 0755 "${tmpfile}" "${CLOUDFLARED_BIN}"
   ensure_binary_runs "${CLOUDFLARED_BIN}" "cloudflared" version
   rm -f "${tmpfile}"
-  print_ok "cloudflared installed to ${CLOUDFLARED_BIN}"
+  print_ok "cloudflared 已安装到 ${CLOUDFLARED_BIN}"
 }
 
 create_systemd_units() {
@@ -349,7 +349,7 @@ EOF
 
 create_cron_watchdog() {
   if ! command_exists crontab; then
-    print_warn "crontab not found, skipping watchdog cron creation."
+    print_warn "未找到 crontab，已跳过 watchdog 的 cron 创建。"
     return 0
   fi
 
@@ -363,9 +363,9 @@ service_state() {
   detect_systemd
   if [ "${has_systemd}" = true ]; then
     if systemctl is-active --quiet "${SERVICE_NAME}"; then
-      printf 'running'
+      printf '运行中'
     else
-      printf 'stopped'
+      printf '已停止'
     fi
     return 0
   fi
@@ -373,9 +373,9 @@ service_state() {
   local pid
   pid="$(read_pid_file "${PID_FILE}" 2>/dev/null || true)"
   if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
-    printf 'running'
+    printf '运行中'
   else
-    printf 'stopped'
+    printf '已停止'
   fi
 }
 
@@ -390,7 +390,7 @@ stop_service() {
 
 start_service() {
   detect_systemd
-  [ -x "${SINGBOX_BIN}" ] || fatal "sing-box is not installed yet."
+  [ -x "${SINGBOX_BIN}" ] || fatal "尚未安装 sing-box。"
   "${SINGBOX_BIN}" check -c "${CONFIG_FILE}" >/dev/null
 
   if [ "${has_systemd}" = true ]; then
@@ -403,7 +403,7 @@ start_service() {
     write_pid_file "${PID_FILE}" "$!"
   fi
 
-  print_ok "Service state: $(service_state)"
+  print_ok "服务状态：$(service_state)"
 }
 
 install_core() {
@@ -428,7 +428,7 @@ install_core() {
 ensure_singbox_ready() {
   init_storage
   if [ ! -x "${SINGBOX_BIN}" ]; then
-    print_info "sing-box not installed, installing now."
+    print_info "检测到 sing-box 尚未安装，开始自动安装。"
     install_core
   fi
 }
@@ -464,13 +464,13 @@ prompt_port() {
   local default="$1"
   local port
   while true; do
-    port="$(prompt_with_default "Port" "$default")"
+    port="$(prompt_with_default "端口" "$default")"
     if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-      print_warn "Invalid port: ${port}"
+      print_warn "端口无效：${port}"
       continue
     fi
     if ! port_available "$port"; then
-      print_warn "Port ${port} is already in use."
+      print_warn "端口 ${port} 已被占用。"
       continue
     fi
     printf '%s' "$port"
@@ -484,7 +484,7 @@ prompt_certificate_bundle() {
   local mode cert_path key_path pair
 
   while true; do
-    mode="$(prompt_choice "Certificate mode (self-signed/custom)" "self-signed")"
+    mode="$(prompt_choice "证书模式 (self-signed/custom)" "self-signed")"
     case "$mode" in
       self-signed|self|quick)
         pair="$(ensure_tls_material "$tag" "$default_domain")"
@@ -492,21 +492,21 @@ prompt_certificate_bundle() {
         return 0
         ;;
       custom)
-        cert_path="$(prompt_nonempty "Certificate path")"
-        key_path="$(prompt_nonempty "Private key path")"
+        cert_path="$(prompt_nonempty "证书路径")"
+        key_path="$(prompt_nonempty "私钥路径")"
         [ -r "$cert_path" ] || {
-          print_warn "Certificate not readable: ${cert_path}"
+          print_warn "证书不可读取：${cert_path}"
           continue
         }
         [ -r "$key_path" ] || {
-          print_warn "Private key not readable: ${key_path}"
+          print_warn "私钥不可读取：${key_path}"
           continue
         }
         printf 'custom|%s|%s' "$cert_path" "$key_path"
         return 0
         ;;
       *)
-        print_warn "Please choose self-signed or custom."
+        print_warn "请输入 self-signed 或 custom。"
         ;;
     esac
   done
@@ -773,7 +773,7 @@ start_argo_node() {
   if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
     json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"
   else
-    fatal "Timed out waiting for temporary Argo domain for ${tag}"
+    fatal "等待 ${tag} 的临时 Argo 域名超时。"
   fi
 }
 
@@ -793,10 +793,10 @@ add_vless_reality() {
   acquire_lock
   tag="$(generate_tag "vless-reality")"
   port="$(prompt_port 443)"
-  name="$(prompt_with_default "Node name" "VLESS-Reality")"
-  read -r -p "UUID (leave blank to auto generate): " uuid
+  name="$(prompt_with_default "节点名称" "VLESS-Reality")"
+  read -r -p "UUID（留空自动生成）: " uuid
   uuid="${uuid:-$(generate_uuid)}"
-  reality_server="$(prompt_with_default "Reality server name" "${DEFAULT_REALITY_SERVER}")"
+  reality_server="$(prompt_with_default "Reality 域名" "${DEFAULT_REALITY_SERVER}")"
 
   key_output="$("${SINGBOX_BIN}" generate reality-keypair)"
   private_key="$(printf '%s\n' "$key_output" | awk -F': ' '/PrivateKey/ {print $2; exit}')"
@@ -827,7 +827,7 @@ add_vless_reality() {
   start_service
   sanitize_permissions
   release_lock
-  print_ok "Added ${name}"
+  print_ok "已添加节点：${name}"
 }
 
 add_vless_ws_tls() {
@@ -836,12 +836,12 @@ add_vless_ws_tls() {
   acquire_lock
   tag="$(generate_tag "vless-ws-tls")"
   port="$(prompt_port 8443)"
-  name="$(prompt_with_default "Node name" "VLESS-WS-TLS")"
-  read -r -p "UUID (leave blank to auto generate): " uuid
+  name="$(prompt_with_default "节点名称" "VLESS-WS-TLS")"
+  read -r -p "UUID（留空自动生成）: " uuid
   uuid="${uuid:-$(generate_uuid)}"
-  preferred_domain="$(prompt_with_default "Preferred domain" "${DEFAULT_CDN_DOMAIN}")"
-  host_domain="$(prompt_with_default "Host/SNI domain" "${DEFAULT_TLS_SERVER}")"
-  ws_path="$(prompt_with_default "WebSocket path" "$(random_ws_path)")"
+  preferred_domain="$(prompt_with_default "优选域名" "${DEFAULT_CDN_DOMAIN}")"
+  host_domain="$(prompt_with_default "Host/SNI 域名" "${DEFAULT_TLS_SERVER}")"
+  ws_path="$(prompt_with_default "WebSocket 路径" "$(random_ws_path)")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$host_domain")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -874,12 +874,12 @@ add_vless_ws_tls() {
   if ! save_node_bundle "$tag" "$node_json" "$secret_json" || ! render_config || ! start_service; then
     rollback_new_node "$tag" "$cert_file" "$key_file"
     release_lock
-    fatal "Failed to add ${name}"
+    fatal "添加节点失败：${name}"
   fi
 
   sanitize_permissions
   release_lock
-  print_ok "Added ${name}"
+  print_ok "已添加节点：${name}"
 }
 
 add_anytls() {
@@ -888,10 +888,10 @@ add_anytls() {
   acquire_lock
   tag="$(generate_tag "anytls")"
   port="$(prompt_port 5443)"
-  name="$(prompt_with_default "Node name" "AnyTLS")"
-  read -r -p "Password (leave blank to auto generate): " password
+  name="$(prompt_with_default "节点名称" "AnyTLS")"
+  read -r -p "密码（留空自动生成）: " password
   password="${password:-$(generate_hex 8)}"
-  tls_server="$(prompt_with_default "SNI domain" "${DEFAULT_TLS_SERVER}")"
+  tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -920,12 +920,12 @@ add_anytls() {
   if ! save_node_bundle "$tag" "$node_json" "$secret_json" || ! render_config || ! start_service; then
     rollback_new_node "$tag" "$cert_file" "$key_file"
     release_lock
-    fatal "Failed to add ${name}"
+    fatal "添加节点失败：${name}"
   fi
 
   sanitize_permissions
   release_lock
-  print_ok "Added ${name}"
+  print_ok "已添加节点：${name}"
 }
 
 add_vless_argo() {
@@ -934,15 +934,15 @@ add_vless_argo() {
   acquire_lock
   tag="$(generate_tag "vless-argo")"
   port="$(prompt_port 8001)"
-  name="$(prompt_with_default "Node name" "VLESS-Argo")"
-  read -r -p "UUID (leave blank to auto generate): " uuid
+  name="$(prompt_with_default "节点名称" "VLESS-Argo")"
+  read -r -p "UUID（留空自动生成）: " uuid
   uuid="${uuid:-$(generate_uuid)}"
-  preferred_domain="$(prompt_with_default "Preferred domain" "${DEFAULT_CDN_DOMAIN}")"
-  ws_path="$(prompt_with_default "WebSocket path" "$(random_ws_path)")"
-  argo_mode="$(prompt_choice "Tunnel mode (temp/token)" "temp")"
+  preferred_domain="$(prompt_with_default "优选域名" "${DEFAULT_CDN_DOMAIN}")"
+  ws_path="$(prompt_with_default "WebSocket 路径" "$(random_ws_path)")"
+  argo_mode="$(prompt_choice "隧道模式 (temp/token)" "temp")"
   if [ "${argo_mode}" = "token" ]; then
-    argo_token="$(prompt_nonempty "Cloudflared tunnel token")"
-    endpoint_domain="$(prompt_nonempty "Argo endpoint domain")"
+    argo_token="$(prompt_nonempty "Cloudflared 隧道 Token")"
+    endpoint_domain="$(prompt_nonempty "Argo 回源域名")"
   else
     argo_mode="temp"
     argo_token=""
@@ -973,12 +973,12 @@ add_vless_argo() {
   if ! save_node_bundle "$tag" "$node_json" "$secret_json" || ! render_config || ! start_service || ! start_argo_node "$tag"; then
     rollback_new_node "$tag"
     release_lock
-    fatal "Failed to add ${name}"
+    fatal "添加节点失败：${name}"
   fi
 
   sanitize_permissions
   release_lock
-  print_ok "Added ${name}"
+  print_ok "已添加节点：${name}"
 }
 
 add_tuic_v5() {
@@ -987,12 +987,12 @@ add_tuic_v5() {
   acquire_lock
   tag="$(generate_tag "tuic-v5")"
   port="$(prompt_port 10443)"
-  name="$(prompt_with_default "Node name" "TUIC-v5")"
-  read -r -p "UUID (leave blank to auto generate): " uuid
+  name="$(prompt_with_default "节点名称" "TUIC-v5")"
+  read -r -p "UUID（留空自动生成）: " uuid
   uuid="${uuid:-$(generate_uuid)}"
-  read -r -p "Password (leave blank to auto generate): " password
+  read -r -p "密码（留空自动生成）: " password
   password="${password:-$uuid}"
-  tls_server="$(prompt_with_default "SNI domain" "${DEFAULT_TLS_SERVER}")"
+  tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1021,12 +1021,12 @@ add_tuic_v5() {
   if ! save_node_bundle "$tag" "$node_json" "$secret_json" || ! render_config || ! start_service; then
     rollback_new_node "$tag" "$cert_file" "$key_file"
     release_lock
-    fatal "Failed to add ${name}"
+    fatal "添加节点失败：${name}"
   fi
 
   sanitize_permissions
   release_lock
-  print_ok "Added ${name}"
+  print_ok "已添加节点：${name}"
 }
 
 add_hy2() {
@@ -1035,10 +1035,10 @@ add_hy2() {
   acquire_lock
   tag="$(generate_tag "hy2")"
   port="$(prompt_port 11443)"
-  name="$(prompt_with_default "Node name" "Hysteria2")"
-  read -r -p "Password (leave blank to auto generate): " password
+  name="$(prompt_with_default "节点名称" "Hysteria2")"
+  read -r -p "密码（留空自动生成）: " password
   password="${password:-$(generate_hex 8)}"
-  tls_server="$(prompt_with_default "SNI domain" "${DEFAULT_TLS_SERVER}")"
+  tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1067,12 +1067,12 @@ add_hy2() {
   if ! save_node_bundle "$tag" "$node_json" "$secret_json" || ! render_config || ! start_service; then
     rollback_new_node "$tag" "$cert_file" "$key_file"
     release_lock
-    fatal "Failed to add ${name}"
+    fatal "添加节点失败：${name}"
   fi
 
   sanitize_permissions
   release_lock
-  print_ok "Added ${name}"
+  print_ok "已添加节点：${name}"
 }
 
 add_socks5() {
@@ -1081,9 +1081,9 @@ add_socks5() {
   acquire_lock
   tag="$(generate_tag "socks5")"
   port="$(prompt_port 1080)"
-  name="$(prompt_with_default "Node name" "SOCKS5")"
-  username="$(prompt_with_default "Username" "user")"
-  read -r -p "Password (leave blank to auto generate): " password
+  name="$(prompt_with_default "节点名称" "SOCKS5")"
+  username="$(prompt_with_default "用户名" "user")"
+  read -r -p "密码（留空自动生成）: " password
   password="${password:-$(generate_hex 6)}"
 
   node_json="$(jq -n \
@@ -1102,12 +1102,12 @@ add_socks5() {
   if ! save_node_bundle "$tag" "$node_json" "$secret_json" || ! render_config || ! start_service; then
     rollback_new_node "$tag"
     release_lock
-    fatal "Failed to add ${name}"
+    fatal "添加节点失败：${name}"
   fi
 
   sanitize_permissions
   release_lock
-  print_ok "Added ${name}"
+  print_ok "已添加节点：${name}"
 }
 
 print_node_list() {
@@ -1118,14 +1118,14 @@ print_node_list() {
     protocol="$(node_value "$tag" "protocol")"
     name="$(node_value "$tag" "name")"
     port="$(node_value "$tag" "port")"
-    echo "${idx}. ${name} | ${protocol} | port: ${port}"
-    echo "   tag: ${tag}"
-    echo "   link: $(build_share_link "$tag")"
+    echo "${idx}. ${name} | ${protocol} | 端口: ${port}"
+    echo "   标识: ${tag}"
+    echo "   链接: $(build_share_link "$tag")"
     idx=$((idx + 1))
   done < <(iter_node_tags)
 
   if [ "${idx}" -eq 1 ]; then
-    echo "No nodes found."
+    echo "当前没有节点。"
   fi
 }
 
@@ -1138,11 +1138,11 @@ select_node_tag() {
   idx=1
   for row in "${rows[@]}"; do
     IFS=$'\t' read -r tag protocol name port <<< "${row}"
-    printf '%s\n' "${idx}. ${name} | ${protocol} | port: ${port}" >&2
+    printf '%s\n' "${idx}. ${name} | ${protocol} | 端口: ${port}" >&2
     idx=$((idx + 1))
   done
 
-  read -r -p "Select node number: " input
+  read -r -p "请选择节点编号: " input
   if ! [[ "${input}" =~ ^[0-9]+$ ]] || [ "${input}" -lt 1 ] || [ "${input}" -gt "${#rows[@]}" ]; then
     return 1
   fi
@@ -1162,12 +1162,12 @@ delete_node() {
   local tag protocol cert_file key_file
   init_storage
   tag="$(select_node_tag)" || {
-    print_warn "No nodes found or invalid selection."
+    print_warn "没有可选节点，或输入的编号无效。"
     return 1
   }
 
   protocol="$(node_value "$tag" "protocol")"
-  if ! confirm_yes "Delete node ${tag}?"; then
+  if ! confirm_yes "确认删除节点 ${tag} 吗？"; then
     return 0
   fi
 
@@ -1184,7 +1184,7 @@ delete_node() {
   [ -n "${key_file}" ] && [ -f "${key_file}" ] && rm -f "${key_file}"
   sanitize_permissions
   release_lock
-  print_ok "Deleted ${tag}"
+  print_ok "已删除节点：${tag}"
 }
 
 show_status() {
@@ -1193,17 +1193,17 @@ show_status() {
   detect_systemd
   count="$(jq 'length' "${NODES_FILE}" 2>/dev/null || printf '0')"
   echo
-  echo "Project: ${PROJECT_NAME}"
-  echo "Version: ${SCRIPT_VERSION}"
-  echo "Service: $(service_state)"
-  echo "Nodes: ${count}"
+  echo "项目名称：${PROJECT_NAME}"
+  echo "当前版本：${SCRIPT_VERSION}"
+  echo "服务状态：$(service_state)"
+  echo "节点数量：${count}"
   if [ "${has_systemd}" = true ]; then
-    echo "Watchdog timer: $(systemctl is-active "${WATCHDOG_TIMER_NAME}" 2>/dev/null || echo unknown)"
+    echo "守护定时器：$(systemctl is-active "${WATCHDOG_TIMER_NAME}" 2>/dev/null || echo 未知)"
   else
-    echo "Watchdog: cron"
+    echo "守护方式：cron"
   fi
-  echo "Pinned sing-box: ${SINGBOX_VERSION}"
-  echo "Pinned cloudflared: ${CLOUDFLARED_VERSION}"
+  echo "锁定 sing-box 版本：${SINGBOX_VERSION}"
+  echo "锁定 cloudflared 版本：${CLOUDFLARED_VERSION}"
   echo
   print_node_list
   echo
@@ -1221,17 +1221,17 @@ restart_stack() {
 update_script() {
   local latest_tag
   latest_tag="$(curl -fsSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | jq -r '.tag_name')"
-  [ -n "${latest_tag}" ] || fatal "Could not determine latest release."
+  [ -n "${latest_tag}" ] || fatal "无法获取最新发布版本。"
   acquire_lock
   install_release_bundle "${latest_tag}"
   sanitize_permissions
   release_lock
-  print_ok "Updated project files to ${latest_tag}"
+  print_ok "项目文件已更新到 ${latest_tag}"
 }
 
 uninstall_project() {
   local tag
-  if ! confirm_yes "This will remove ${PROJECT_NAME}. Continue"; then
+  if ! confirm_yes "这将卸载 ${PROJECT_NAME}，是否继续？"; then
     return 0
   fi
 
@@ -1255,7 +1255,7 @@ uninstall_project() {
 
   rm -rf "${BASE_DIR}" "${LIB_DIR}" "${INSTALL_BIN}" "${SINGBOX_BIN}" "${CLOUDFLARED_BIN}"
   release_lock
-  print_ok "Project removed."
+  print_ok "项目已卸载。"
 }
 
 menu_add_node() {
@@ -1267,9 +1267,9 @@ menu_add_node() {
   echo "5. TUIC v5"
   echo "6. Hysteria2"
   echo "7. SOCKS5"
-  echo "0. Back"
+  echo "0. 返回"
   echo
-  read -r -p "Select: " choice
+  read -r -p "请选择: " choice
   case "${choice}" in
     1) add_vless_reality ;;
     2) add_vless_ws_tls ;;
@@ -1279,7 +1279,7 @@ menu_add_node() {
     6) add_hy2 ;;
     7) add_socks5 ;;
     0) return 0 ;;
-    *) print_warn "Invalid choice." ;;
+    *) print_warn "无效的选择。" ;;
   esac
 }
 
@@ -1296,28 +1296,28 @@ main_menu() {
   init_storage
   while true; do
     print_header
-    echo "1. Install/Update core"
-    echo "2. Add node"
-    echo "3. View nodes"
-    echo "4. Delete node"
-    echo "5. Restart services"
-    echo "6. Status"
-    echo "7. Update project files"
-    echo "8. Uninstall"
-    echo "0. Exit"
+    echo "1. 安装/更新核心组件"
+    echo "2. 添加节点"
+    echo "3. 查看节点"
+    echo "4. 删除节点"
+    echo "5. 重启服务"
+    echo "6. 查看状态"
+    echo "7. 更新项目文件"
+    echo "8. 卸载"
+    echo "0. 退出"
     echo
-    read -r -p "Select: " choice
+    read -r -p "请选择: " choice
     case "${choice}" in
       1) install_core ;;
       2) menu_add_node ;;
-      3) list_nodes; read -r -p "Press Enter to continue..." _ ;;
-      4) delete_node; read -r -p "Press Enter to continue..." _ ;;
-      5) restart_stack; read -r -p "Press Enter to continue..." _ ;;
-      6) show_status; read -r -p "Press Enter to continue..." _ ;;
-      7) update_script; read -r -p "Press Enter to continue..." _ ;;
+      3) list_nodes; read -r -p "按回车继续..." _ ;;
+      4) delete_node; read -r -p "按回车继续..." _ ;;
+      5) restart_stack; read -r -p "按回车继续..." _ ;;
+      6) show_status; read -r -p "按回车继续..." _ ;;
+      7) update_script; read -r -p "按回车继续..." _ ;;
       8) uninstall_project; exit 0 ;;
       0) exit 0 ;;
-      *) print_warn "Invalid choice."; sleep 1 ;;
+      *) print_warn "无效的选择。"; sleep 1 ;;
     esac
   done
 }

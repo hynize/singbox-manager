@@ -5,9 +5,9 @@ umask 077
 
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
-PROJECT_VERSION="v0.2.4"
-PACKAGE_NAME="singbox-manager-v0.2.4.tar.gz"
-PACKAGE_SHA256="b25d26ee3b32ce293789732cffe16cf45df1b070d60ebf0f4a2e35805ec21776"
+PROJECT_VERSION="v0.2.5"
+PACKAGE_NAME="singbox-manager-v0.2.5.tar.gz"
+PACKAGE_SHA256="7976e8c1bde25c62b60a4cd91eebf7ae6dfa781fe8ddf532505fc6c39973c3a8"
 PACKAGE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${PROJECT_VERSION}/${PACKAGE_NAME}"
 
 INSTALL_BIN="/usr/local/bin/sbm"
@@ -18,7 +18,7 @@ UPSTREAM_ENV="${LIB_DIR}/upstream.env"
 COMMON_LIB="${LIB_DIR}/common.sh"
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-  echo "Please run as root." >&2
+  echo "请使用 root 用户运行。" >&2
   exit 1
 fi
 
@@ -30,7 +30,7 @@ download() {
   elif command -v wget >/dev/null 2>&1; then
     wget -qO "$out" "$url"
   else
-    echo "curl or wget is required." >&2
+    echo "需要安装 curl 或 wget。" >&2
     exit 1
   fi
 }
@@ -51,9 +51,9 @@ verify_bundle() {
   local actual
   actual="$(sha256_file "$bundle")"
   if [ "$actual" != "$PACKAGE_SHA256" ]; then
-    echo "Bundle checksum mismatch." >&2
-    echo "Expected: $PACKAGE_SHA256" >&2
-    echo "Actual:   $actual" >&2
+    echo "安装包校验失败。" >&2
+    echo "预期值: $PACKAGE_SHA256" >&2
+    echo "实际值: $actual" >&2
     exit 1
   fi
 }
@@ -84,7 +84,7 @@ main() {
   verify_bundle "${bundle}"
   install_bundle "${bundle}"
   rm -f "${bundle}"
-  echo "Singbox Manager ${PROJECT_VERSION} installed: ${INSTALL_BIN}"
+  echo "Singbox Manager ${PROJECT_VERSION} 安装完成：${INSTALL_BIN}"
   exec "${INSTALL_BIN}"
 }
 
