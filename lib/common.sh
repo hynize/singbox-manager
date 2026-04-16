@@ -161,9 +161,13 @@ acquire_lock() {
   start_time="$(date +%s)"
   if command_exists flock; then
     exec {LOCK_FD}> "${LOCK_FILE}"
-    if ! flock -w "${LOCK_TIMEOUT}" "${LOCK_FD}"; then
-      fatal "Could not acquire lock within ${LOCK_TIMEOUT}s"
-    fi
+    while ! flock -n "${LOCK_FD}"; do
+      now="$(date +%s)"
+      if [ $((now - start_time)) -ge "${LOCK_TIMEOUT}" ]; then
+        fatal "Could not acquire lock within ${LOCK_TIMEOUT}s"
+      fi
+      sleep 1
+    done
   else
     while ! mkdir "${LOCK_DIR_FALLBACK}" 2>/dev/null; do
       now="$(date +%s)"

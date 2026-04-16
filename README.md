@@ -7,19 +7,19 @@
 发布版安装脚本：
 
 ```text
-https://github.com/hynize/singbox-manager/releases/download/v0.2.2/install.sh
+https://github.com/hynize/singbox-manager/releases/download/v0.2.3/install.sh
 ```
 
 快速安装：
 
 ```bash
-bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.2/install.sh)
+bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.3/install.sh)
 ```
 
 更安全的两步安装：
 
 ```bash
-curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.2/install.sh
+curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.3/install.sh
 bash install.sh
 ```
 
@@ -118,8 +118,8 @@ sbm
 ### 安装链路
 
 - `install.sh` 不再直接拉取 `main` 分支脚本。
-- 安装器固定到发布版本 `v0.2.2`。
-- 安装内容来自 release bundle：`singbox-manager-v0.2.2.tar.gz`
+- 安装器固定到发布版本 `v0.2.3`。
+- 安装内容来自 release bundle：`singbox-manager-v0.2.3.tar.gz`
 - 安装器会对 bundle 做 SHA256 校验后再解包。
 
 ### 公共逻辑层
@@ -128,6 +128,7 @@ sbm
   - 严格模式 `set -eEuo pipefail`
   - `umask 077`
   - 全局锁
+  - `BusyBox flock` 兼容锁轮询
   - 原子 JSON 写入
   - 权限收敛
   - 校验和验证
