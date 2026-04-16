@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox Manager"
-SCRIPT_VERSION="0.2.3"
+SCRIPT_VERSION="0.2.4"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -134,7 +134,7 @@ ensure_dependencies() {
   elif command_exists dnf || command_exists yum; then
     packages=(ca-certificates curl tar jq openssl procps-ng iproute util-linux findutils grep sed gawk coreutils)
   elif command_exists apk; then
-    packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils)
+    packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils gcompat)
   elif command_exists pacman; then
     packages=(ca-certificates curl tar jq openssl procps-ng iproute2 util-linux findutils grep sed gawk coreutils)
   elif command_exists zypper; then
@@ -169,6 +169,23 @@ verify_runtime_prereqs() {
   if [ "${#missing[@]}" -gt 0 ]; then
     fatal "Missing required commands: ${missing[*]}"
   fi
+}
+
+ensure_binary_runs() {
+  local binary="$1"
+  local label="$2"
+  shift 2
+
+  if "$binary" "$@" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command_exists apk; then
+    print_info "Installing gcompat for Alpine compatibility"
+    apk add --no-cache gcompat >/dev/null 2>&1
+  fi
+
+  "$binary" "$@" >/dev/null 2>&1 || fatal "${label} is installed but cannot run on this system."
 }
 
 sync_project_assets_from_source() {
@@ -232,6 +249,7 @@ install_singbox_core() {
   binary="$(find "${tmpdir}" -type f -name sing-box | head -n 1)"
   [ -n "${binary}" ] || fatal "sing-box binary not found in archive"
   install -m 0755 "${binary}" "${SINGBOX_BIN}"
+  ensure_binary_runs "${SINGBOX_BIN}" "sing-box" version
   rm -rf "${tmpdir}"
   print_ok "sing-box installed to ${SINGBOX_BIN}"
 }
@@ -250,6 +268,7 @@ install_cloudflared_bin() {
   download_file "${url}" "${tmpfile}"
   verify_sha256 "${tmpfile}" "${expected}"
   install -m 0755 "${tmpfile}" "${CLOUDFLARED_BIN}"
+  ensure_binary_runs "${CLOUDFLARED_BIN}" "cloudflared" version
   rm -f "${tmpfile}"
   print_ok "cloudflared installed to ${CLOUDFLARED_BIN}"
 }
