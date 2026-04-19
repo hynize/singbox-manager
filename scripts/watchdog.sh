@@ -25,8 +25,11 @@ fi
 setup_common_traps
 
 has_systemd=false
+has_openrc=false
 if command_exists systemctl && [ -d /run/systemd/system ]; then
   has_systemd=true
+elif command_exists rc-service && [ -x /sbin/openrc-run ]; then
+  has_openrc=true
 fi
 
 start_non_systemd_singbox() {
@@ -35,12 +38,31 @@ start_non_systemd_singbox() {
   fi
 
   if ! "${SINGBOX_BIN}" check -c "${CONFIG_FILE}" >/dev/null 2>&1; then
-    print_warn "Skipping sing-box restart because config validation failed."
+    print_warn "配置校验失败，已跳过 sing-box 重启。"
     return 0
   fi
 
+  rotate_log_file "${LOG_DIR}/sing-box.log" || true
   nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${LOG_DIR}/sing-box.log" 2>&1 &
   write_pid_file "${PID_FILE}" "$!"
+}
+
+ensure_log_rotation() {
+  if rotate_log_file "${LOG_DIR}/sing-box.log"; then
+    if [ "${has_systemd}" = true ]; then
+      systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 || true
+      return 0
+    fi
+
+    if [ "${has_openrc}" = true ]; then
+      kill_pid_file "${PID_FILE}"
+      rc-service "${SERVICE_NAME}" restart >/dev/null 2>&1 || rc-service "${SERVICE_NAME}" start >/dev/null 2>&1 || true
+      return 0
+    fi
+
+    rm -f "${PID_FILE}"
+    start_non_systemd_singbox
+  fi
 }
 
 ensure_singbox() {
@@ -51,6 +73,14 @@ ensure_singbox() {
   if [ "${has_systemd}" = true ]; then
     if ! systemctl is-active --quiet "${SERVICE_NAME}"; then
       systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+
+  if [ "${has_openrc}" = true ]; then
+    if ! rc-service "${SERVICE_NAME}" status >/dev/null 2>&1; then
+      kill_pid_file "${PID_FILE}"
+      rc-service "${SERVICE_NAME}" restart >/dev/null 2>&1 || rc-service "${SERVICE_NAME}" start >/dev/null 2>&1 || true
     fi
     return 0
   fi
@@ -81,7 +111,7 @@ start_temp_tunnel() {
   if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
     json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"
   else
-    print_warn "Timed out waiting for temporary Argo domain for ${tag}"
+    print_warn "等待 ${tag} 的临时 Argo 域名超时。"
   fi
 }
 
@@ -129,6 +159,7 @@ require_root
 init_storage
 sanitize_permissions
 acquire_lock
+ensure_log_rotation
 ensure_singbox
 ensure_argo_nodes
 sanitize_permissions

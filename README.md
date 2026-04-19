@@ -7,19 +7,19 @@
 发布版安装脚本：
 
 ```text
-https://github.com/hynize/singbox-manager/releases/download/v0.2.5/install.sh
+https://github.com/hynize/singbox-manager/releases/download/v0.2.6/install.sh
 ```
 
 快速安装：
 
 ```bash
-bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.5/install.sh)
+bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.6/install.sh)
 ```
 
 更安全的两步安装：
 
 ```bash
-curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.5/install.sh
+curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.6/install.sh
 bash install.sh
 ```
 
@@ -42,9 +42,11 @@ sbm
 - 所有节点名称可自定义
 - `VLESS + Argo`、`VLESS + WS + TLS` 支持自定义优选域名，默认 `saas.sin.fan`
 - `VLESS + Reality` 默认伪装域名 `www.apple.com`
-- `TUIC v5` 分享链接默认附带跳过证书验证参数
+- `TUIC v5` 在自签证书模式下默认附带跳过证书验证参数
 - UUID 留空时自动生成
 - 支持自动保活 `sing-box + cloudflared`
+- 支持日志轮转
+- 支持 `OpenRC`
 - 支持发布版自更新
 
 ## 交互目录设计
@@ -118,8 +120,8 @@ sbm
 ### 安装链路
 
 - `install.sh` 不再直接拉取 `main` 分支脚本。
-- 安装器固定到发布版本 `v0.2.5`。
-- 安装内容来自 release bundle：`singbox-manager-v0.2.5.tar.gz`
+- 安装器固定到发布版本 `v0.2.6`。
+- 安装内容来自 release bundle：`singbox-manager-v0.2.6.tar.gz`
 - 安装器会对 bundle 做 SHA256 校验后再解包。
 
 ### 公共逻辑层
@@ -130,6 +132,7 @@ sbm
   - 全局锁
   - `BusyBox flock` 兼容锁轮询
   - Alpine `musl/glibc` 兼容补丁
+  - 日志轮转
   - 原子 JSON 写入
   - 权限收敛
   - 校验和验证
@@ -194,12 +197,13 @@ sbm
 
 - 自动生成 UUID
 - 密码留空默认复用 UUID
-- 默认生成 `allow_insecure=1`
+- 自签证书模式下默认生成 `allow_insecure=1`
 - 支持自签证书和自定义证书
 
 ### Hysteria2
 
 - 自动生成密码
+- 支持自定义上下行带宽
 - 自签证书模式下分享链接会附带 `insecure=1`
 - 自定义证书模式下默认不附带不安全参数
 

@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.5"
+SCRIPT_VERSION="0.2.6"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -23,6 +23,7 @@ WATCHDOG_TIMER_NAME="singbox-manager-watchdog.timer"
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SYSTEMD_WATCHDOG_SERVICE_FILE="/etc/systemd/system/${WATCHDOG_SERVICE_NAME}.service"
 SYSTEMD_WATCHDOG_TIMER_FILE="/etc/systemd/system/${WATCHDOG_TIMER_NAME}"
+OPENRC_SERVICE_FILE="/etc/init.d/${SERVICE_NAME}"
 
 DEFAULT_CDN_DOMAIN="saas.sin.fan"
 DEFAULT_REALITY_SERVER="www.apple.com"
@@ -55,13 +56,24 @@ fi
 setup_common_traps
 
 has_systemd=false
+has_openrc=false
 
 detect_systemd() {
+  has_systemd=false
+  has_openrc=false
+
   if command_exists systemctl && [ -d /run/systemd/system ]; then
     has_systemd=true
-  else
-    has_systemd=false
+  elif command_exists rc-service && [ -x /sbin/openrc-run ]; then
+    has_openrc=true
   fi
+}
+
+normalize_input() {
+  local value="$1"
+  printf '%s' "$value" \
+    | tr -d '\000-\010\013\014\016-\037\177' \
+    | sed -e 's/\r//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
 prompt_with_default() {
@@ -69,6 +81,7 @@ prompt_with_default() {
   local default="$2"
   local value
   read -r -p "${prompt} [${default}]: " value
+  value="$(normalize_input "${value:-$default}")"
   printf '%s' "${value:-$default}"
 }
 
@@ -77,14 +90,23 @@ prompt_nonempty() {
   local value=""
   while [ -z "$value" ]; do
     read -r -p "${prompt}: " value
+    value="$(normalize_input "$value")"
   done
   printf '%s' "$value"
+}
+
+prompt_optional_value() {
+  local prompt="$1"
+  local value
+  read -r -p "${prompt}: " value
+  normalize_input "$value"
 }
 
 confirm_yes() {
   local prompt="$1"
   local answer
   read -r -p "${prompt} [y/N]: " answer
+  answer="$(normalize_input "$answer")"
   [[ "$answer" =~ ^([Yy]|[Yy][Ee][Ss]|是)$ ]]
 }
 
@@ -93,8 +115,22 @@ prompt_choice() {
   local default="$2"
   local value
   read -r -p "${prompt} [${default}]: " value
-  value="${value:-$default}"
+  value="$(normalize_input "${value:-$default}")"
   printf '%s' "${value,,}"
+}
+
+prompt_positive_integer() {
+  local prompt="$1"
+  local default="$2"
+  local value
+  while true; do
+    value="$(prompt_with_default "${prompt}" "${default}")"
+    if [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -gt 0 ]; then
+      printf '%s' "$value"
+      return 0
+    fi
+    print_warn "${prompt} 必须是大于 0 的整数。"
+  done
 }
 
 detect_arch() {
@@ -156,6 +192,8 @@ verify_runtime_prereqs() {
 
   if [ "${has_systemd}" = true ]; then
     required+=("systemctl")
+  elif [ "${has_openrc}" = true ]; then
+    required+=("rc-service" "rc-update")
   fi
 
   for cmd in "${required[@]}"; do
@@ -347,6 +385,35 @@ EOF
   systemctl enable --now "${WATCHDOG_TIMER_NAME}" >/dev/null 2>&1 || true
 }
 
+create_openrc_units() {
+  cat > "${OPENRC_SERVICE_FILE}" <<EOF
+#!/sbin/openrc-run
+
+name="${SERVICE_NAME}"
+description="Singbox Manager"
+command="${SINGBOX_BIN}"
+command_args="run -c ${CONFIG_FILE}"
+command_background=true
+pidfile="${PID_FILE}"
+
+depend() {
+  need net
+}
+
+start_pre() {
+  ${SINGBOX_BIN} check -c ${CONFIG_FILE} >/dev/null
+}
+EOF
+
+  chmod 0755 "${OPENRC_SERVICE_FILE}"
+  rc-update add "${SERVICE_NAME}" default >/dev/null 2>&1 || true
+
+  if command_exists rc-service && [ -x /etc/init.d/crond ]; then
+    rc-update add crond default >/dev/null 2>&1 || true
+    rc-service crond start >/dev/null 2>&1 || true
+  fi
+}
+
 create_cron_watchdog() {
   if ! command_exists crontab; then
     print_warn "未找到 crontab，已跳过 watchdog 的 cron 创建。"
@@ -370,6 +437,15 @@ service_state() {
     return 0
   fi
 
+  if [ "${has_openrc}" = true ]; then
+    if rc-service "${SERVICE_NAME}" status >/dev/null 2>&1; then
+      printf '运行中'
+    else
+      printf '已停止'
+    fi
+    return 0
+  fi
+
   local pid
   pid="$(read_pid_file "${PID_FILE}" 2>/dev/null || true)"
   if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
@@ -383,6 +459,9 @@ stop_service() {
   detect_systemd
   if [ "${has_systemd}" = true ]; then
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  elif [ "${has_openrc}" = true ]; then
+    rc-service "${SERVICE_NAME}" stop >/dev/null 2>&1 || true
+    kill_pid_file "${PID_FILE}"
   else
     kill_pid_file "${PID_FILE}"
   fi
@@ -391,12 +470,16 @@ stop_service() {
 start_service() {
   detect_systemd
   [ -x "${SINGBOX_BIN}" ] || fatal "尚未安装 sing-box。"
+  rotate_log_file "${BASE_DIR}/logs/sing-box.log" || true
   "${SINGBOX_BIN}" check -c "${CONFIG_FILE}" >/dev/null
 
   if [ "${has_systemd}" = true ]; then
     systemctl daemon-reload
     systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 || systemctl start "${SERVICE_NAME}" >/dev/null 2>&1
     systemctl enable --now "${WATCHDOG_TIMER_NAME}" >/dev/null 2>&1 || true
+  elif [ "${has_openrc}" = true ]; then
+    stop_service
+    rc-service "${SERVICE_NAME}" restart >/dev/null 2>&1 || rc-service "${SERVICE_NAME}" start >/dev/null 2>&1
   else
     stop_service
     nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${BASE_DIR}/logs/sing-box.log" 2>&1 &
@@ -416,6 +499,9 @@ install_core() {
   install_cloudflared_bin
   if [ "${has_systemd}" = true ]; then
     create_systemd_units
+  elif [ "${has_openrc}" = true ]; then
+    create_openrc_units
+    create_cron_watchdog
   else
     create_cron_watchdog
   fi
@@ -701,20 +787,25 @@ render_inbound_for_tag() {
       password="$(secret_value "$tag" "password")"
       cert_file="$(node_value "$tag" "certificate_path")"
       key_file="$(node_value "$tag" "key_path")"
+      local up_mbps down_mbps
+      up_mbps="$(node_value "$tag" "up_mbps")"
+      down_mbps="$(node_value "$tag" "down_mbps")"
       jq -n \
         --arg tag "$tag" \
         --arg name "$name" \
         --arg password "$password" \
         --arg cert_file "$cert_file" \
         --arg key_file "$key_file" \
+        --argjson up_mbps "${up_mbps:-200}" \
+        --argjson down_mbps "${down_mbps:-200}" \
         --argjson port "$port" '{
           type: "hysteria2",
           tag: $tag,
           listen: "::",
           listen_port: $port,
           users: [{ name: $name, password: $password }],
-          up_mbps: 200,
-          down_mbps: 200,
+          up_mbps: $up_mbps,
+          down_mbps: $down_mbps,
           tls: {
             enabled: true,
             alpn: ["h3"],
@@ -794,7 +885,7 @@ add_vless_reality() {
   tag="$(generate_tag "vless-reality")"
   port="$(prompt_port 443)"
   name="$(prompt_with_default "节点名称" "VLESS-Reality")"
-  read -r -p "UUID（留空自动生成）: " uuid
+  uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
   reality_server="$(prompt_with_default "Reality 域名" "${DEFAULT_REALITY_SERVER}")"
 
@@ -822,9 +913,12 @@ add_vless_reality() {
     --arg uuid "$uuid" \
     --arg private_key "$private_key" '{ uuid: $uuid, private_key: $private_key }')"
 
-  save_node_bundle "$tag" "$node_json" "$secret_json"
-  render_config
-  start_service
+  if ! save_node_bundle "$tag" "$node_json" "$secret_json" || ! render_config || ! start_service; then
+    rollback_new_node "$tag"
+    release_lock
+    fatal "添加节点失败：${name}"
+  fi
+
   sanitize_permissions
   release_lock
   print_ok "已添加节点：${name}"
@@ -837,7 +931,7 @@ add_vless_ws_tls() {
   tag="$(generate_tag "vless-ws-tls")"
   port="$(prompt_port 8443)"
   name="$(prompt_with_default "节点名称" "VLESS-WS-TLS")"
-  read -r -p "UUID（留空自动生成）: " uuid
+  uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
   preferred_domain="$(prompt_with_default "优选域名" "${DEFAULT_CDN_DOMAIN}")"
   host_domain="$(prompt_with_default "Host/SNI 域名" "${DEFAULT_TLS_SERVER}")"
@@ -889,7 +983,7 @@ add_anytls() {
   tag="$(generate_tag "anytls")"
   port="$(prompt_port 5443)"
   name="$(prompt_with_default "节点名称" "AnyTLS")"
-  read -r -p "密码（留空自动生成）: " password
+  password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$(generate_hex 8)}"
   tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
@@ -935,7 +1029,7 @@ add_vless_argo() {
   tag="$(generate_tag "vless-argo")"
   port="$(prompt_port 8001)"
   name="$(prompt_with_default "节点名称" "VLESS-Argo")"
-  read -r -p "UUID（留空自动生成）: " uuid
+  uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
   preferred_domain="$(prompt_with_default "优选域名" "${DEFAULT_CDN_DOMAIN}")"
   ws_path="$(prompt_with_default "WebSocket 路径" "$(random_ws_path)")"
@@ -988,9 +1082,9 @@ add_tuic_v5() {
   tag="$(generate_tag "tuic-v5")"
   port="$(prompt_port 10443)"
   name="$(prompt_with_default "节点名称" "TUIC-v5")"
-  read -r -p "UUID（留空自动生成）: " uuid
+  uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
-  read -r -p "密码（留空自动生成）: " password
+  password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$uuid}"
   tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
@@ -1030,15 +1124,17 @@ add_tuic_v5() {
 }
 
 add_hy2() {
-  local tag port name password tls_server cert_bundle cert_mode cert_file key_file node_json secret_json
+  local tag port name password tls_server cert_bundle cert_mode cert_file key_file node_json secret_json up_mbps down_mbps
   ensure_singbox_ready
   acquire_lock
   tag="$(generate_tag "hy2")"
   port="$(prompt_port 11443)"
   name="$(prompt_with_default "节点名称" "Hysteria2")"
-  read -r -p "密码（留空自动生成）: " password
+  password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$(generate_hex 8)}"
   tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
+  up_mbps="$(prompt_positive_integer "上行带宽 Mbps" 200)"
+  down_mbps="$(prompt_positive_integer "下行带宽 Mbps" 200)"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1050,6 +1146,8 @@ add_hy2() {
     --arg name "$name" \
     --argjson port "$port" \
     --arg tls_server "$tls_server" \
+    --argjson up_mbps "$up_mbps" \
+    --argjson down_mbps "$down_mbps" \
     --arg certificate_mode "$cert_mode" \
     --arg certificate_path "$cert_file" \
     --arg key_path "$key_file" '{
@@ -1057,6 +1155,8 @@ add_hy2() {
       name: $name,
       port: $port,
       tls_server: $tls_server,
+      up_mbps: $up_mbps,
+      down_mbps: $down_mbps,
       certificate_mode: $certificate_mode,
       certificate_path: $certificate_path,
       key_path: $key_path
@@ -1083,7 +1183,7 @@ add_socks5() {
   port="$(prompt_port 1080)"
   name="$(prompt_with_default "节点名称" "SOCKS5")"
   username="$(prompt_with_default "用户名" "user")"
-  read -r -p "密码（留空自动生成）: " password
+  password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$(generate_hex 6)}"
 
   node_json="$(jq -n \
@@ -1199,6 +1299,8 @@ show_status() {
   echo "节点数量：${count}"
   if [ "${has_systemd}" = true ]; then
     echo "守护定时器：$(systemctl is-active "${WATCHDOG_TIMER_NAME}" 2>/dev/null || echo 未知)"
+  elif [ "${has_openrc}" = true ]; then
+    echo "守护方式：OpenRC + cron"
   else
     echo "守护方式：cron"
   fi
@@ -1249,6 +1351,12 @@ uninstall_project() {
     systemctl disable --now "${SERVICE_NAME}" >/dev/null 2>&1 || true
     rm -f "${SYSTEMD_SERVICE_FILE}" "${SYSTEMD_WATCHDOG_SERVICE_FILE}" "${SYSTEMD_WATCHDOG_TIMER_FILE}"
     systemctl daemon-reload || true
+  elif [ "${has_openrc}" = true ]; then
+    rc-update del "${SERVICE_NAME}" default >/dev/null 2>&1 || true
+    rm -f "${OPENRC_SERVICE_FILE}"
+    if command_exists crontab; then
+      (crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" || true) | crontab -
+    fi
   elif command_exists crontab; then
     (crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" || true) | crontab -
   fi

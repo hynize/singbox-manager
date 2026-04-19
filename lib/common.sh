@@ -14,6 +14,8 @@ LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs}"
 RUNTIME_DIR="${RUNTIME_DIR:-${BASE_DIR}/runtime}"
 LOCK_FILE="${LOCK_FILE:-${BASE_DIR}/.lock}"
 LOCK_TIMEOUT="${LOCK_TIMEOUT:-30}"
+LOG_ROTATE_SIZE_MB="${LOG_ROTATE_SIZE_MB:-50}"
+LOG_ROTATE_BACKUPS="${LOG_ROTATE_BACKUPS:-3}"
 
 SINGBOX_BIN="${SINGBOX_BIN:-/usr/local/bin/sing-box}"
 CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-/usr/local/bin/cloudflared}"
@@ -395,6 +397,37 @@ kill_pid_file() {
   rm -f "$pid_file"
 }
 
+rotate_log_file() {
+  local file="$1"
+  local size max_bytes idx
+
+  [ -f "$file" ] || return 1
+  size="$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]')"
+  [ -n "$size" ] || return 1
+
+  max_bytes=$((LOG_ROTATE_SIZE_MB * 1024 * 1024))
+  if [ "$size" -lt "$max_bytes" ]; then
+    return 1
+  fi
+
+  rm -f "${file}.${LOG_ROTATE_BACKUPS}"
+
+  if [ "${LOG_ROTATE_BACKUPS}" -gt 1 ]; then
+    idx=$((LOG_ROTATE_BACKUPS - 1))
+    while [ "$idx" -ge 1 ]; do
+      if [ -f "${file}.${idx}" ]; then
+        mv "${file}.${idx}" "${file}.$((idx + 1))"
+      fi
+      idx=$((idx - 1))
+    done
+  fi
+
+  mv "$file" "${file}.1"
+  : > "$file"
+  chmod 600 "$file"
+  return 0
+}
+
 build_share_link() {
   local tag="$1"
   local protocol name port public_ip host uuid password username
@@ -452,8 +485,13 @@ build_share_link() {
       uuid="$(secret_value "$tag" "uuid")"
       password="$(secret_value "$tag" "password")"
       tls_server="$(node_value "$tag" "tls_server")"
-      printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&alpn=h3&sni=%s&allow_insecure=1&allowInsecure=1#%s' \
-        "$uuid" "$(url_encode "$password")" "$host" "$port" "$tls_server" "$(url_encode "$name")"
+      cert_mode="$(node_value "$tag" "certificate_mode")"
+      printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&alpn=h3&sni=%s' \
+        "$uuid" "$(url_encode "$password")" "$host" "$port" "$tls_server"
+      if [ "$cert_mode" = "self-signed" ]; then
+        printf '&allow_insecure=1&allowInsecure=1'
+      fi
+      printf '#%s' "$(url_encode "$name")"
       ;;
     hy2)
       password="$(secret_value "$tag" "password")"
