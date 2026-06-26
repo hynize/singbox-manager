@@ -2,7 +2,7 @@
 set -eEuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="$(tr -d '\r\n' < "${ROOT_DIR}/VERSION")"
+VERSION="$(tr -d '\r\n' <"${ROOT_DIR}/VERSION")"
 DIST_DIR="${ROOT_DIR}/dist"
 PACKAGE_DIR="${DIST_DIR}/singbox-manager-${VERSION}"
 PACKAGE_NAME="singbox-manager-${VERSION}.tar.gz"
@@ -22,7 +22,7 @@ tar -czf "${DIST_DIR}/${PACKAGE_NAME}" -C "${DIST_DIR}" "singbox-manager-${VERSI
 
 (
   cd "${DIST_DIR}"
-  sha256sum "${PACKAGE_NAME}" > checksums.txt
+  sha256sum "${PACKAGE_NAME}" >checksums.txt
 )
 
 echo "Built ${DIST_DIR}/${PACKAGE_NAME}"

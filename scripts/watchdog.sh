@@ -48,21 +48,7 @@ start_non_systemd_singbox() {
 }
 
 ensure_log_rotation() {
-  if rotate_log_file "${LOG_DIR}/sing-box.log"; then
-    if [ "${has_systemd}" = true ]; then
-      systemctl restart "${SERVICE_NAME}" >/dev/null 2>&1 || true
-      return 0
-    fi
-
-    if [ "${has_openrc}" = true ]; then
-      kill_pid_file "${PID_FILE}"
-      rc-service "${SERVICE_NAME}" restart >/dev/null 2>&1 || rc-service "${SERVICE_NAME}" start >/dev/null 2>&1 || true
-      return 0
-    fi
-
-    rm -f "${PID_FILE}"
-    start_non_systemd_singbox
-  fi
+  rotate_log_file "${LOG_DIR}/sing-box.log" || true
 }
 
 ensure_singbox() {
@@ -102,15 +88,25 @@ start_temp_tunnel() {
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
-  : > "${log_file}"
+  : >"${log_file}"
   chmod 600 "${log_file}"
   nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version auto --url "http://127.0.0.1:${local_port}" \
     >"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 
   if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
-    json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"
+    acquire_lock
+    if jq -e --arg tag "$tag" 'has($tag)' "${NODES_FILE}" >/dev/null 2>&1; then
+      if ! json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"; then
+        kill_pid_file "${pid_file}"
+        print_warn "写入 ${tag} 的临时 Argo 域名失败。"
+      fi
+    else
+      kill_pid_file "${pid_file}"
+    fi
+    release_lock
   else
+    kill_pid_file "${pid_file}"
     print_warn "等待 ${tag} 的临时 Argo 域名超时。"
   fi
 }
@@ -122,7 +118,7 @@ start_token_tunnel() {
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
-  : > "${log_file}"
+  : >"${log_file}"
   chmod 600 "${log_file}"
   nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version auto run --token "${token}" \
     >"${log_file}" 2>&1 &
@@ -150,7 +146,9 @@ ensure_argo_nodes() {
     if [ "${mode}" = "token" ]; then
       start_token_tunnel "${tag}"
     else
+      release_lock
       start_temp_tunnel "${tag}"
+      acquire_lock
     fi
   done < <(iter_node_tags)
 }

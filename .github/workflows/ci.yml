@@ -26,7 +26,7 @@ jobs:
         run: bash -n install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
 
       - name: Formatting
-        run: shfmt -d install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
+        run: shfmt -i 2 -d install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
 
       - name: Build Bundle
         run: bash scripts/build-release-bundle.sh
