@@ -71,9 +71,9 @@ detect_systemd() {
 
 normalize_input() {
   local value="$1"
-  printf '%s' "$value" \
-    | tr -d '\000-\010\013\014\016-\037\177' \
-    | sed -e 's/\r//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+  printf '%s' "$value" |
+    tr -d '\000-\037\177' |
+    sed -e 's/\r//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
 prompt_with_default() {
@@ -135,11 +135,11 @@ prompt_positive_integer() {
 
 detect_arch() {
   case "$(uname -m)" in
-    x86_64|amd64) printf 'amd64' ;;
-    aarch64|arm64) printf 'arm64' ;;
-    armv7l|armv7) printf 'armv7' ;;
-    armv6l|armv6) printf 'armv6' ;;
-    *) return 1 ;;
+  x86_64 | amd64) printf 'amd64' ;;
+  aarch64 | arm64) printf 'arm64' ;;
+  armv7l | armv7) printf 'armv7' ;;
+  armv6l | armv6) printf 'armv6' ;;
+  *) return 1 ;;
   esac
 }
 
@@ -187,7 +187,7 @@ verify_runtime_prereqs() {
     curl tar jq openssl awk sed grep find head mktemp install nohup tr hostname
   )
 
-  local proc_tools=("kill" "rm" "mv" "chmod" "cat")
+  local proc_tools=("kill" "rm" "mv" "chmod" "cat" "cp")
   required+=("${proc_tools[@]}")
 
   if [ "${has_systemd}" = true ]; then
@@ -312,7 +312,7 @@ install_cloudflared_bin() {
 }
 
 create_systemd_units() {
-  cat > "${SYSTEMD_SERVICE_FILE}" <<EOF
+  cat >"${SYSTEMD_SERVICE_FILE}" <<EOF
 [Unit]
 Description=Singbox Manager
 After=network-online.target
@@ -345,7 +345,7 @@ ReadWritePaths=${BASE_DIR}
 WantedBy=multi-user.target
 EOF
 
-  cat > "${SYSTEMD_WATCHDOG_SERVICE_FILE}" <<EOF
+  cat >"${SYSTEMD_WATCHDOG_SERVICE_FILE}" <<EOF
 [Unit]
 Description=Singbox Manager Watchdog
 After=network-online.target
@@ -367,7 +367,7 @@ ProcSubset=pid
 ReadWritePaths=${BASE_DIR}
 EOF
 
-  cat > "${SYSTEMD_WATCHDOG_TIMER_FILE}" <<EOF
+  cat >"${SYSTEMD_WATCHDOG_TIMER_FILE}" <<EOF
 [Unit]
 Description=Run Singbox Manager Watchdog Every Minute
 
@@ -386,7 +386,7 @@ EOF
 }
 
 create_openrc_units() {
-  cat > "${OPENRC_SERVICE_FILE}" <<EOF
+  cat >"${OPENRC_SERVICE_FILE}" <<EOF
 #!/sbin/openrc-run
 
 name="${SERVICE_NAME}"
@@ -421,7 +421,7 @@ create_cron_watchdog() {
   fi
 
   (
-    crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" || true
+    crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" | grep -Fv "no crontab for" || true
     echo "* * * * * ${WATCHDOG_TARGET} >/dev/null 2>&1"
   ) | crontab -
 }
@@ -527,9 +527,15 @@ metadata_has_port() {
 system_has_port() {
   local port="$1"
   if command_exists ss; then
-    ss -ltnuH 2>/dev/null | awk '{print $5}' | grep -Eq "[:.]${port}$"
+    ss -ltnuH 2>/dev/null | awk -v port="$port" '
+      { addr = $5; sub(/.*:/, "", addr); if (addr == port) found = 1 }
+      END { exit found ? 0 : 1 }
+    '
   elif command_exists netstat; then
-    netstat -lntup 2>/dev/null | awk 'NR>2 {print $4}' | grep -Eq "[:.]${port}$"
+    netstat -lntup 2>/dev/null | awk -v port="$port" 'NR > 2 {
+      addr = $4; sub(/.*:/, "", addr); if (addr == port) found = 1
+    }
+    END { exit found ? 0 : 1 }'
   else
     return 1
   fi
@@ -564,6 +570,93 @@ prompt_port() {
   done
 }
 
+managed_cert_path() {
+  local tag="$1"
+  local path="$2"
+  [ "${path%/*}" = "${CERT_DIR}" ] || return 1
+  case "$path" in
+  "${CERT_DIR}/${tag}."*/*) return 1 ;;
+  "${CERT_DIR}/${tag}."*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+import_custom_certificate_bundle() {
+  local tag="$1"
+  local cert_path="$2"
+  local key_path="$3"
+  local cert_file="${CERT_DIR}/${tag}.custom.crt"
+  local key_file="${CERT_DIR}/${tag}.custom.key"
+  local cert_copied=false
+
+  if [ "$cert_path" != "$cert_file" ]; then
+    cp "$cert_path" "$cert_file" || return 1
+    cert_copied=true
+  fi
+  if [ "$key_path" != "$key_file" ]; then
+    cp "$key_path" "$key_file" || {
+      if [ "$cert_copied" = true ]; then
+        rm -f "$cert_file"
+      fi
+      return 1
+    }
+  fi
+  chmod 600 "$cert_file" "$key_file"
+  printf '%s|%s' "$cert_file" "$key_file"
+}
+
+remove_node_certificates() {
+  local tag="$1"
+  local cert_file="${2:-}"
+  local key_file="${3:-}"
+
+  if [ -n "$cert_file" ] && [ -f "$cert_file" ] && managed_cert_path "$tag" "$cert_file"; then
+    rm -f "$cert_file"
+  fi
+  if [ -n "$key_file" ] && [ -f "$key_file" ] && managed_cert_path "$tag" "$key_file"; then
+    rm -f "$key_file"
+  fi
+}
+
+migrate_custom_certificate_bundle() {
+  local tag="$1"
+  local cert_mode cert_file key_file pair
+
+  cert_mode="$(node_value "$tag" "certificate_mode")"
+  [ "$cert_mode" = "custom" ] || return 0
+
+  cert_file="$(node_value "$tag" "certificate_path")"
+  key_file="$(node_value "$tag" "key_path")"
+  if managed_cert_path "$tag" "$cert_file" && managed_cert_path "$tag" "$key_file"; then
+    return 0
+  fi
+  if [ ! -r "$cert_file" ] || [ ! -r "$key_file" ]; then
+    print_err "自定义证书不可读取，无法导入托管目录：${tag}"
+    return 1
+  fi
+
+  pair="$(import_custom_certificate_bundle "$tag" "$cert_file" "$key_file")" || return 1
+  json_set_field "${NODES_FILE}" "$tag" "certificate_path" "${pair%|*}" || return 1
+  json_set_field "${NODES_FILE}" "$tag" "key_path" "${pair#*|}" || return 1
+}
+
+migrate_custom_certificates() {
+  local tags tag
+  if ! tags="$(iter_node_tags)"; then
+    print_err "读取节点列表失败。"
+    return 1
+  fi
+  while IFS= read -r tag; do
+    [ -n "$tag" ] || continue
+    migrate_custom_certificate_bundle "$tag" || return 1
+  done <<<"$tags"
+}
+
+cleanup_argo_pid() {
+  local pid_file="$1"
+  kill_pid_file "$pid_file"
+}
+
 prompt_certificate_bundle() {
   local tag="$1"
   local default_domain="$2"
@@ -572,28 +665,32 @@ prompt_certificate_bundle() {
   while true; do
     mode="$(prompt_choice "证书模式 (self-signed/custom)" "self-signed")"
     case "$mode" in
-      self-signed|self|quick)
-        pair="$(ensure_tls_material "$tag" "$default_domain")"
-        printf 'self-signed|%s|%s' "${pair%|*}" "${pair#*|}"
-        return 0
-        ;;
-      custom)
-        cert_path="$(prompt_nonempty "证书路径")"
-        key_path="$(prompt_nonempty "私钥路径")"
-        [ -r "$cert_path" ] || {
-          print_warn "证书不可读取：${cert_path}"
-          continue
-        }
-        [ -r "$key_path" ] || {
-          print_warn "私钥不可读取：${key_path}"
-          continue
-        }
-        printf 'custom|%s|%s' "$cert_path" "$key_path"
-        return 0
-        ;;
-      *)
-        print_warn "请输入 self-signed 或 custom。"
-        ;;
+    self-signed | self | quick)
+      pair="$(ensure_tls_material "$tag" "$default_domain")"
+      printf 'self-signed|%s|%s' "${pair%|*}" "${pair#*|}"
+      return 0
+      ;;
+    custom)
+      cert_path="$(prompt_nonempty "证书路径")"
+      key_path="$(prompt_nonempty "私钥路径")"
+      [ -r "$cert_path" ] || {
+        print_warn "证书不可读取：${cert_path}"
+        continue
+      }
+      [ -r "$key_path" ] || {
+        print_warn "私钥不可读取：${key_path}"
+        continue
+      }
+      if ! pair="$(import_custom_certificate_bundle "$tag" "$cert_path" "$key_path")"; then
+        print_warn "导入自定义证书失败，请检查路径和权限。"
+        continue
+      fi
+      printf 'custom|%s|%s' "${pair%|*}" "${pair#*|}"
+      return 0
+      ;;
+    *)
+      print_warn "请输入 self-signed 或 custom。"
+      ;;
     esac
   done
 }
@@ -603,8 +700,7 @@ rollback_new_node() {
   local cert_file="${2:-}"
   local key_file="${3:-}"
   delete_node_records "$tag" || true
-  [ -n "${cert_file}" ] && [ -f "${cert_file}" ] && rm -f "${cert_file}"
-  [ -n "${key_file}" ] && [ -f "${key_file}" ] && rm -f "${key_file}"
+  remove_node_certificates "$tag" "$cert_file" "$key_file"
   render_config || true
 }
 
@@ -617,22 +713,33 @@ save_node_bundle() {
 }
 
 render_config() {
-  local inbounds_json tmp
-  inbounds_json="$(
+  local inbounds_json tmp tags
+  migrate_custom_certificates || return 1
+  if ! tags="$(iter_node_tags)"; then
+    print_err "读取节点列表失败。"
+    return 1
+  fi
+  if ! inbounds_json="$(
     while IFS= read -r tag; do
       [ -n "${tag}" ] || continue
-      render_inbound_for_tag "${tag}"
-    done < <(iter_node_tags)
-  )"
+      render_inbound_for_tag "${tag}" || exit 1
+    done <<<"$tags"
+  )"; then
+    print_err "生成 sing-box 入站配置失败。"
+    return 1
+  fi
 
   if [ -n "${inbounds_json}" ]; then
-    inbounds_json="$(printf '%s\n' "${inbounds_json}" | jq -s '.')"
+    if ! inbounds_json="$(printf '%s\n' "${inbounds_json}" | jq -s '.')"; then
+      print_err "合并 sing-box 入站配置失败。"
+      return 1
+    fi
   else
     inbounds_json='[]'
   fi
 
   tmp="$(mktemp "${BASE_DIR}/.config.XXXXXX")"
-  jq -n --arg log_path "${BASE_DIR}/logs/sing-box.log" --argjson inbounds "${inbounds_json}" '{
+  if ! jq -n --arg log_path "${BASE_DIR}/logs/sing-box.log" --argjson inbounds "${inbounds_json}" '{
     log: {
       level: "info",
       timestamp: true,
@@ -646,9 +753,16 @@ render_config() {
       final: "direct",
       auto_detect_interface: true
     }
-  }' > "${tmp}"
-  chmod 600 "${tmp}"
-  mv "${tmp}" "${CONFIG_FILE}"
+  }' >"${tmp}"; then
+    rm -f "${tmp}"
+    print_err "写入 sing-box 配置失败。"
+    return 1
+  fi
+  if ! chmod 600 "${tmp}" || ! mv "${tmp}" "${CONFIG_FILE}"; then
+    rm -f "${tmp}"
+    print_err "保存 sing-box 配置失败。"
+    return 1
+  fi
 }
 
 render_inbound_for_tag() {
@@ -660,17 +774,17 @@ render_inbound_for_tag() {
   port="$(node_value "$tag" "port")"
 
   case "$protocol" in
-    vless-reality)
-      uuid="$(secret_value "$tag" "uuid")"
-      reality_server="$(node_value "$tag" "reality_server")"
-      jq -n \
-        --arg tag "$tag" \
-        --arg name "$name" \
-        --arg uuid "$uuid" \
-        --arg server "$reality_server" \
-        --arg private_key "$(secret_value "$tag" "private_key")" \
-        --arg short_id "$(node_value "$tag" "short_id")" \
-        --argjson port "$port" '{
+  vless-reality)
+    uuid="$(secret_value "$tag" "uuid")"
+    reality_server="$(node_value "$tag" "reality_server")"
+    jq -n \
+      --arg tag "$tag" \
+      --arg name "$name" \
+      --arg uuid "$uuid" \
+      --arg server "$reality_server" \
+      --arg private_key "$(secret_value "$tag" "private_key")" \
+      --arg short_id "$(node_value "$tag" "short_id")" \
+      --argjson port "$port" '{
           type: "vless",
           tag: $tag,
           listen: "::",
@@ -687,20 +801,20 @@ render_inbound_for_tag() {
             }
           }
         }'
-      ;;
-    vless-ws-tls)
-      uuid="$(secret_value "$tag" "uuid")"
-      ws_path="$(node_value "$tag" "ws_path")"
-      cert_file="$(node_value "$tag" "certificate_path")"
-      key_file="$(node_value "$tag" "key_path")"
-      jq -n \
-        --arg tag "$tag" \
-        --arg name "$name" \
-        --arg uuid "$uuid" \
-        --arg ws_path "$ws_path" \
-        --arg cert_file "$cert_file" \
-        --arg key_file "$key_file" \
-        --argjson port "$port" '{
+    ;;
+  vless-ws-tls)
+    uuid="$(secret_value "$tag" "uuid")"
+    ws_path="$(node_value "$tag" "ws_path")"
+    cert_file="$(node_value "$tag" "certificate_path")"
+    key_file="$(node_value "$tag" "key_path")"
+    jq -n \
+      --arg tag "$tag" \
+      --arg name "$name" \
+      --arg uuid "$uuid" \
+      --arg ws_path "$ws_path" \
+      --arg cert_file "$cert_file" \
+      --arg key_file "$key_file" \
+      --argjson port "$port" '{
           type: "vless",
           tag: $tag,
           listen: "::",
@@ -713,18 +827,18 @@ render_inbound_for_tag() {
           },
           transport: { type: "ws", path: $ws_path }
         }'
-      ;;
-    anytls)
-      password="$(secret_value "$tag" "password")"
-      cert_file="$(node_value "$tag" "certificate_path")"
-      key_file="$(node_value "$tag" "key_path")"
-      jq -n \
-        --arg tag "$tag" \
-        --arg name "$name" \
-        --arg password "$password" \
-        --arg cert_file "$cert_file" \
-        --arg key_file "$key_file" \
-        --argjson port "$port" '{
+    ;;
+  anytls)
+    password="$(secret_value "$tag" "password")"
+    cert_file="$(node_value "$tag" "certificate_path")"
+    key_file="$(node_value "$tag" "key_path")"
+    jq -n \
+      --arg tag "$tag" \
+      --arg name "$name" \
+      --arg password "$password" \
+      --arg cert_file "$cert_file" \
+      --arg key_file "$key_file" \
+      --argjson port "$port" '{
           type: "anytls",
           tag: $tag,
           listen: "::",
@@ -736,16 +850,16 @@ render_inbound_for_tag() {
             key_path: $key_file
           }
         }'
-      ;;
-    vless-argo)
-      uuid="$(secret_value "$tag" "uuid")"
-      ws_path="$(node_value "$tag" "ws_path")"
-      jq -n \
-        --arg tag "$tag" \
-        --arg name "$name" \
-        --arg uuid "$uuid" \
-        --arg ws_path "$ws_path" \
-        --argjson port "$port" '{
+    ;;
+  vless-argo)
+    uuid="$(secret_value "$tag" "uuid")"
+    ws_path="$(node_value "$tag" "ws_path")"
+    jq -n \
+      --arg tag "$tag" \
+      --arg name "$name" \
+      --arg uuid "$uuid" \
+      --arg ws_path "$ws_path" \
+      --argjson port "$port" '{
           type: "vless",
           tag: $tag,
           listen: "127.0.0.1",
@@ -753,20 +867,20 @@ render_inbound_for_tag() {
           users: [{ name: $name, uuid: $uuid }],
           transport: { type: "ws", path: $ws_path }
         }'
-      ;;
-    tuic-v5)
-      uuid="$(secret_value "$tag" "uuid")"
-      password="$(secret_value "$tag" "password")"
-      cert_file="$(node_value "$tag" "certificate_path")"
-      key_file="$(node_value "$tag" "key_path")"
-      jq -n \
-        --arg tag "$tag" \
-        --arg name "$name" \
-        --arg uuid "$uuid" \
-        --arg password "$password" \
-        --arg cert_file "$cert_file" \
-        --arg key_file "$key_file" \
-        --argjson port "$port" '{
+    ;;
+  tuic-v5)
+    uuid="$(secret_value "$tag" "uuid")"
+    password="$(secret_value "$tag" "password")"
+    cert_file="$(node_value "$tag" "certificate_path")"
+    key_file="$(node_value "$tag" "key_path")"
+    jq -n \
+      --arg tag "$tag" \
+      --arg name "$name" \
+      --arg uuid "$uuid" \
+      --arg password "$password" \
+      --arg cert_file "$cert_file" \
+      --arg key_file "$key_file" \
+      --argjson port "$port" '{
           type: "tuic",
           tag: $tag,
           listen: "::",
@@ -782,23 +896,23 @@ render_inbound_for_tag() {
             key_path: $key_file
           }
         }'
-      ;;
-    hy2)
-      password="$(secret_value "$tag" "password")"
-      cert_file="$(node_value "$tag" "certificate_path")"
-      key_file="$(node_value "$tag" "key_path")"
-      local up_mbps down_mbps
-      up_mbps="$(node_value "$tag" "up_mbps")"
-      down_mbps="$(node_value "$tag" "down_mbps")"
-      jq -n \
-        --arg tag "$tag" \
-        --arg name "$name" \
-        --arg password "$password" \
-        --arg cert_file "$cert_file" \
-        --arg key_file "$key_file" \
-        --argjson up_mbps "${up_mbps:-200}" \
-        --argjson down_mbps "${down_mbps:-200}" \
-        --argjson port "$port" '{
+    ;;
+  hy2)
+    password="$(secret_value "$tag" "password")"
+    cert_file="$(node_value "$tag" "certificate_path")"
+    key_file="$(node_value "$tag" "key_path")"
+    local up_mbps down_mbps
+    up_mbps="$(node_value "$tag" "up_mbps")"
+    down_mbps="$(node_value "$tag" "down_mbps")"
+    jq -n \
+      --arg tag "$tag" \
+      --arg name "$name" \
+      --arg password "$password" \
+      --arg cert_file "$cert_file" \
+      --arg key_file "$key_file" \
+      --argjson up_mbps "${up_mbps:-200}" \
+      --argjson down_mbps "${down_mbps:-200}" \
+      --argjson port "$port" '{
           type: "hysteria2",
           tag: $tag,
           listen: "::",
@@ -813,20 +927,24 @@ render_inbound_for_tag() {
             key_path: $key_file
           }
         }'
-      ;;
-    socks5)
-      jq -n \
-        --arg tag "$tag" \
-        --arg username "$(node_value "$tag" "username")" \
-        --arg password "$(secret_value "$tag" "password")" \
-        --argjson port "$port" '{
+    ;;
+  socks5)
+    jq -n \
+      --arg tag "$tag" \
+      --arg username "$(node_value "$tag" "username")" \
+      --arg password "$(secret_value "$tag" "password")" \
+      --argjson port "$port" '{
           type: "socks",
           tag: $tag,
           listen: "::",
           listen_port: $port,
           users: [{ username: $username, password: $password }]
         }'
-      ;;
+    ;;
+  *)
+    print_err "不支持的节点协议：${protocol}"
+    return 1
+    ;;
   esac
 }
 
@@ -846,7 +964,7 @@ start_argo_node() {
   pid_file="${BASE_DIR}/runtime/${tag}.pid"
 
   stop_argo_node "$tag"
-  : > "${log_file}"
+  : >"${log_file}"
   chmod 600 "${log_file}"
 
   if [ "${mode}" = "token" ]; then
@@ -862,9 +980,14 @@ start_argo_node() {
   write_pid_file "${pid_file}" "$!"
 
   if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
-    json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"
+    if ! json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"; then
+      cleanup_argo_pid "${pid_file}"
+      return 1
+    fi
   else
-    fatal "等待 ${tag} 的临时 Argo 域名超时。"
+    cleanup_argo_pid "${pid_file}"
+    print_err "等待 ${tag} 的临时 Argo 域名超时。"
+    return 1
   fi
 }
 
@@ -890,8 +1013,10 @@ add_vless_reality() {
   reality_server="$(prompt_with_default "Reality 域名" "${DEFAULT_REALITY_SERVER}")"
 
   key_output="$("${SINGBOX_BIN}" generate reality-keypair)"
-  private_key="$(printf '%s\n' "$key_output" | awk -F': ' '/PrivateKey/ {print $2; exit}')"
-  public_key="$(printf '%s\n' "$key_output" | awk -F': ' '/PublicKey/ {print $2; exit}')"
+  private_key="$(printf '%s\n' "$key_output" | sed -n 's/^PrivateKey:[[:space:]]*//p' | head -n 1)"
+  public_key="$(printf '%s\n' "$key_output" | sed -n 's/^PublicKey:[[:space:]]*//p' | head -n 1)"
+  [ -n "$private_key" ] || fatal "无法解析 Reality 私钥。"
+  [ -n "$public_key" ] || fatal "无法解析 Reality 公钥。"
   short_id="$(generate_hex 4)"
 
   node_json="$(jq -n \
@@ -1237,7 +1362,7 @@ select_node_tag() {
 
   idx=1
   for row in "${rows[@]}"; do
-    IFS=$'\t' read -r tag protocol name port <<< "${row}"
+    IFS=$'\t' read -r tag protocol name port <<<"${row}"
     printf '%s\n' "${idx}. ${name} | ${protocol} | 端口: ${port}" >&2
     idx=$((idx + 1))
   done
@@ -1247,7 +1372,7 @@ select_node_tag() {
     return 1
   fi
 
-  IFS=$'\t' read -r tag _ <<< "${rows[$((input - 1))]}"
+  IFS=$'\t' read -r tag _ <<<"${rows[$((input - 1))]}"
   printf '%s' "${tag}"
 }
 
@@ -1280,8 +1405,7 @@ delete_node() {
   delete_node_records "$tag"
   render_config
   start_service
-  [ -n "${cert_file}" ] && [ -f "${cert_file}" ] && rm -f "${cert_file}"
-  [ -n "${key_file}" ] && [ -f "${key_file}" ] && rm -f "${key_file}"
+  remove_node_certificates "$tag" "$cert_file" "$key_file"
   sanitize_permissions
   release_lock
   print_ok "已删除节点：${tag}"
@@ -1322,7 +1446,9 @@ restart_stack() {
 
 update_script() {
   local latest_tag
-  latest_tag="$(curl -fsSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | jq -r '.tag_name')"
+  if ! latest_tag="$(curl -fsSL --retry 3 --retry-delay 2 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | jq -r '.tag_name // empty')"; then
+    fatal "无法获取最新发布版本。"
+  fi
   [ -n "${latest_tag}" ] || fatal "无法获取最新发布版本。"
   acquire_lock
   install_release_bundle "${latest_tag}"
@@ -1355,10 +1481,10 @@ uninstall_project() {
     rc-update del "${SERVICE_NAME}" default >/dev/null 2>&1 || true
     rm -f "${OPENRC_SERVICE_FILE}"
     if command_exists crontab; then
-      (crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" || true) | crontab -
+      (crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" | grep -Fv "no crontab for" || true) | crontab -
     fi
   elif command_exists crontab; then
-    (crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" || true) | crontab -
+    (crontab -l 2>/dev/null | grep -Fv "${WATCHDOG_TARGET}" | grep -Fv "no crontab for" || true) | crontab -
   fi
 
   rm -rf "${BASE_DIR}" "${LIB_DIR}" "${INSTALL_BIN}" "${SINGBOX_BIN}" "${CLOUDFLARED_BIN}"
@@ -1379,15 +1505,15 @@ menu_add_node() {
   echo
   read -r -p "请选择: " choice
   case "${choice}" in
-    1) add_vless_reality ;;
-    2) add_vless_ws_tls ;;
-    3) add_anytls ;;
-    4) add_vless_argo ;;
-    5) add_tuic_v5 ;;
-    6) add_hy2 ;;
-    7) add_socks5 ;;
-    0) return 0 ;;
-    *) print_warn "无效的选择。" ;;
+  1) add_vless_reality ;;
+  2) add_vless_ws_tls ;;
+  3) add_anytls ;;
+  4) add_vless_argo ;;
+  5) add_tuic_v5 ;;
+  6) add_hy2 ;;
+  7) add_socks5 ;;
+  0) return 0 ;;
+  *) print_warn "无效的选择。" ;;
   esac
 }
 
@@ -1416,16 +1542,37 @@ main_menu() {
     echo
     read -r -p "请选择: " choice
     case "${choice}" in
-      1) install_core ;;
-      2) menu_add_node ;;
-      3) list_nodes; read -r -p "按回车继续..." _ ;;
-      4) delete_node; read -r -p "按回车继续..." _ ;;
-      5) restart_stack; read -r -p "按回车继续..." _ ;;
-      6) show_status; read -r -p "按回车继续..." _ ;;
-      7) update_script; read -r -p "按回车继续..." _ ;;
-      8) uninstall_project; exit 0 ;;
-      0) exit 0 ;;
-      *) print_warn "无效的选择。"; sleep 1 ;;
+    1) install_core ;;
+    2) menu_add_node ;;
+    3)
+      list_nodes
+      read -r -p "按回车继续..." _
+      ;;
+    4)
+      delete_node
+      read -r -p "按回车继续..." _
+      ;;
+    5)
+      restart_stack
+      read -r -p "按回车继续..." _
+      ;;
+    6)
+      show_status
+      read -r -p "按回车继续..." _
+      ;;
+    7)
+      update_script
+      read -r -p "按回车继续..." _
+      ;;
+    8)
+      uninstall_project
+      exit 0
+      ;;
+    0) exit 0 ;;
+    *)
+      print_warn "无效的选择。"
+      sleep 1
+      ;;
     esac
   done
 }

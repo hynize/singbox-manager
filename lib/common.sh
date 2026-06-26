@@ -30,6 +30,7 @@ COLOR_RESET="\033[0m"
 LOCK_HELD=false
 LOCK_FD=""
 LOCK_DIR_FALLBACK="${LOCK_FILE}.d"
+PUBLIC_IP_CACHE="${PUBLIC_IP_CACHE:-}"
 
 print_ok() {
   echo -e "${COLOR_GREEN}[成功]${COLOR_RESET} $*"
@@ -120,7 +121,7 @@ ensure_file_mode() {
   local mode="$2"
   local default_content="${3:-}"
   if [ ! -f "$file" ]; then
-    printf '%s' "$default_content" > "$file"
+    printf '%s' "$default_content" >"$file"
   fi
   chmod "$mode" "$file"
 }
@@ -162,7 +163,7 @@ acquire_lock() {
 
   start_time="$(date +%s)"
   if command_exists flock; then
-    exec {LOCK_FD}> "${LOCK_FILE}"
+    exec {LOCK_FD}>"${LOCK_FILE}"
     while ! flock -n "${LOCK_FD}"; do
       now="$(date +%s)"
       if [ $((now - start_time)) -ge "${LOCK_TIMEOUT}" ]; then
@@ -204,9 +205,14 @@ json_update() {
   shift
   local tmp
   tmp="$(mktemp "${BASE_DIR}/.json.XXXXXX")"
-  jq "$@" "$file" > "${tmp}"
-  chmod 600 "${tmp}"
-  mv "${tmp}" "$file"
+  if ! jq "$@" "$file" >"${tmp}"; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  if ! chmod 600 "${tmp}" || ! mv "${tmp}" "$file"; then
+    rm -f "${tmp}"
+    return 1
+  fi
 }
 
 json_set_record() {
@@ -262,6 +268,33 @@ url_encode() {
   jq -nr --arg s "$1" '$s|@uri'
 }
 
+is_ip_address() {
+  local ip="$1"
+  [[ "${ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || [[ "${ip}" == *:* && "${ip}" =~ ^[0-9a-fA-F:]+$ ]]
+}
+
+is_private_ip() {
+  local ip="$1"
+  local lower
+  lower="${ip,,}"
+
+  if [[ "${ip}" =~ ^10\. ]] || [[ "${ip}" =~ ^127\. ]] || [[ "${ip}" =~ ^169\.254\. ]] || [[ "${ip}" =~ ^192\.168\. ]]; then
+    return 0
+  fi
+  if [[ "${ip}" =~ ^172\.([1][6-9]|2[0-9]|3[0-1])\. ]] || [[ "${ip}" =~ ^100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\. ]]; then
+    return 0
+  fi
+  if [[ "${ip}" =~ ^0\. ]] || [[ "${ip}" =~ ^198\.(18|19)\. ]]; then
+    return 0
+  fi
+
+  case "${lower}" in
+  "" | "::" | "::1" | fe80:* | fc*:* | fd*:* | 2001:db8:*) return 0 ;;
+  esac
+
+  return 1
+}
+
 wrap_host() {
   local host="$1"
   if [[ "$host" == *:* ]] && [[ "$host" != \[*\] ]]; then
@@ -272,18 +305,38 @@ wrap_host() {
 }
 
 get_public_ip() {
-  local ip
+  local ip fallback
+  if [ -n "${PUBLIC_IP_CACHE}" ]; then
+    printf '%s' "${PUBLIC_IP_CACHE}"
+    return 0
+  fi
+
   for url in \
     "https://api64.ipify.org" \
+    "https://ipv6.icanhazip.com" \
     "https://ipv4.icanhazip.com" \
     "https://ifconfig.me/ip"; do
-    ip="$(curl -4 -fsS --max-time 5 "$url" 2>/dev/null | tr -d '\r\n' || true)"
-    if [ -n "$ip" ]; then
-      printf '%s' "$ip"
+    ip="$(curl -fsS --max-time 5 "$url" 2>/dev/null | tr -d '\r\n' || true)"
+    if is_ip_address "$ip" && ! is_private_ip "$ip"; then
+      PUBLIC_IP_CACHE="$ip"
+      printf '%s' "${PUBLIC_IP_CACHE}"
       return 0
     fi
   done
-  hostname -I 2>/dev/null | awk '{print $1}'
+
+  for ip in $(hostname -I 2>/dev/null || true); do
+    if is_ip_address "$ip" && ! is_private_ip "$ip"; then
+      PUBLIC_IP_CACHE="$ip"
+      printf '%s' "${PUBLIC_IP_CACHE}"
+      return 0
+    fi
+    [ -n "${fallback:-}" ] || fallback="$ip"
+  done
+
+  fallback="${fallback:-127.0.0.1}"
+  print_warn "无法探测公网 IP，已回退到本机地址：${fallback}"
+  PUBLIC_IP_CACHE="$fallback"
+  printf '%s' "${PUBLIC_IP_CACHE}"
 }
 
 generate_uuid() {
@@ -292,12 +345,15 @@ generate_uuid() {
   elif command_exists uuidgen; then
     uuidgen | tr '[:upper:]' '[:lower:]'
   else
+    local hex variant
+    hex="$(openssl rand -hex 16)"
+    variant="$(printf '%x' "$(((0x${hex:16:1} & 0x3) | 0x8))")"
     printf '%s-%s-%s-%s-%s\n' \
-      "$(openssl rand -hex 4)" \
-      "$(openssl rand -hex 2)" \
-      "$(openssl rand -hex 2)" \
-      "$(openssl rand -hex 2)" \
-      "$(openssl rand -hex 6)"
+      "${hex:0:8}" \
+      "${hex:8:4}" \
+      "4${hex:13:3}" \
+      "${variant}${hex:17:3}" \
+      "${hex:20:12}"
   fi
 }
 
@@ -312,7 +368,7 @@ random_ws_path() {
 
 generate_tag() {
   local prefix="$1"
-  printf '%s-%s-%s' "$prefix" "$(date +%s)" "$(generate_hex 2)"
+  printf '%s-%s-%s' "$prefix" "$(date +%s)" "$(generate_hex 4)"
 }
 
 ensure_tls_material() {
@@ -377,14 +433,14 @@ wait_for_trycloudflare_domain() {
 write_pid_file() {
   local pid_file="$1"
   local pid="$2"
-  printf '%s\n' "$pid" > "$pid_file"
+  printf '%s\n' "$pid" >"$pid_file"
   chmod 600 "$pid_file"
 }
 
 read_pid_file() {
   local pid_file="$1"
   [ -f "$pid_file" ] || return 1
-  tr -d '\r\n' < "$pid_file"
+  tr -d '\r\n' <"$pid_file"
 }
 
 kill_pid_file() {
@@ -402,12 +458,18 @@ rotate_log_file() {
   local size max_bytes idx
 
   [ -f "$file" ] || return 1
-  size="$(wc -c < "$file" 2>/dev/null | tr -d '[:space:]')"
+  size="$(wc -c <"$file" 2>/dev/null | tr -d '[:space:]')"
   [ -n "$size" ] || return 1
 
   max_bytes=$((LOG_ROTATE_SIZE_MB * 1024 * 1024))
   if [ "$size" -lt "$max_bytes" ]; then
     return 1
+  fi
+
+  if [ "${LOG_ROTATE_BACKUPS}" -le 0 ]; then
+    : >"$file" || return 1
+    chmod 600 "$file" || return 1
+    return 0
   fi
 
   rm -f "${file}.${LOG_ROTATE_BACKUPS}"
@@ -416,15 +478,15 @@ rotate_log_file() {
     idx=$((LOG_ROTATE_BACKUPS - 1))
     while [ "$idx" -ge 1 ]; do
       if [ -f "${file}.${idx}" ]; then
-        mv "${file}.${idx}" "${file}.$((idx + 1))"
+        mv "${file}.${idx}" "${file}.$((idx + 1))" || return 1
       fi
       idx=$((idx - 1))
     done
   fi
 
-  mv "$file" "${file}.1"
-  : > "$file"
-  chmod 600 "$file"
+  cp "$file" "${file}.1" || return 1
+  : >"$file" || return 1
+  chmod 600 "$file" "${file}.1" || return 1
   return 0
 }
 
@@ -440,76 +502,76 @@ build_share_link() {
   host="$(wrap_host "$public_ip")"
 
   case "$protocol" in
-    vless-reality)
-      uuid="$(secret_value "$tag" "uuid")"
-      reality_server="$(node_value "$tag" "reality_server")"
-      public_key="$(node_value "$tag" "public_key")"
-      short_id="$(node_value "$tag" "short_id")"
-      printf 'vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#%s' \
-        "$uuid" "$host" "$port" "$reality_server" "$public_key" "$short_id" "$(url_encode "$name")"
-      ;;
-    vless-ws-tls)
-      uuid="$(secret_value "$tag" "uuid")"
-      ws_path="$(node_value "$tag" "ws_path")"
-      preferred_domain="$(node_value "$tag" "preferred_domain")"
-      host_domain="$(node_value "$tag" "host_domain")"
-      cert_mode="$(node_value "$tag" "certificate_mode")"
-      printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
-        "$uuid" "$(wrap_host "$preferred_domain")" "$port" "$host_domain" "$host_domain" "$(url_encode "$ws_path")"
-      if [ "$cert_mode" = "self-signed" ]; then
-        printf '&allowInsecure=1'
-      fi
-      printf '#%s' "$(url_encode "$name")"
-      ;;
-    anytls)
-      password="$(secret_value "$tag" "password")"
-      tls_server="$(node_value "$tag" "tls_server")"
-      cert_mode="$(node_value "$tag" "certificate_mode")"
-      printf 'anytls://%s@%s:%s?security=tls&sni=%s' \
-        "$(url_encode "$password")" "$host" "$port" "$tls_server"
-      if [ "$cert_mode" = "self-signed" ]; then
-        printf '&allowInsecure=1'
-      fi
-      printf '#%s' "$(url_encode "$name")"
-      ;;
-    vless-argo)
-      uuid="$(secret_value "$tag" "uuid")"
-      ws_path="$(node_value "$tag" "ws_path")"
-      preferred_domain="$(node_value "$tag" "preferred_domain")"
-      endpoint_domain="$(node_value "$tag" "endpoint_domain")"
-      [ -n "$endpoint_domain" ] || endpoint_domain="待分配.example.com"
-      printf 'vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
-        "$uuid" "$(wrap_host "$preferred_domain")" "$endpoint_domain" "$endpoint_domain" "$(url_encode "$ws_path")" "$(url_encode "$name")"
-      ;;
-    tuic-v5)
-      uuid="$(secret_value "$tag" "uuid")"
-      password="$(secret_value "$tag" "password")"
-      tls_server="$(node_value "$tag" "tls_server")"
-      cert_mode="$(node_value "$tag" "certificate_mode")"
-      printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&alpn=h3&sni=%s' \
-        "$uuid" "$(url_encode "$password")" "$host" "$port" "$tls_server"
-      if [ "$cert_mode" = "self-signed" ]; then
-        printf '&allow_insecure=1&allowInsecure=1'
-      fi
-      printf '#%s' "$(url_encode "$name")"
-      ;;
-    hy2)
-      password="$(secret_value "$tag" "password")"
-      tls_server="$(node_value "$tag" "tls_server")"
-      cert_mode="$(node_value "$tag" "certificate_mode")"
-      printf 'hysteria2://%s@%s:%s?sni=%s' \
-        "$(url_encode "$password")" "$host" "$port" "$tls_server"
-      if [ "$cert_mode" = "self-signed" ]; then
-        printf '&insecure=1'
-      fi
-      printf '#%s' "$(url_encode "$name")"
-      ;;
-    socks5)
-      username="$(node_value "$tag" "username")"
-      password="$(secret_value "$tag" "password")"
-      printf 'socks5://%s:%s@%s:%s#%s' \
-        "$(url_encode "$username")" "$(url_encode "$password")" "$host" "$port" "$(url_encode "$name")"
-      ;;
+  vless-reality)
+    uuid="$(secret_value "$tag" "uuid")"
+    reality_server="$(node_value "$tag" "reality_server")"
+    public_key="$(node_value "$tag" "public_key")"
+    short_id="$(node_value "$tag" "short_id")"
+    printf 'vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#%s' \
+      "$uuid" "$host" "$port" "$reality_server" "$public_key" "$short_id" "$(url_encode "$name")"
+    ;;
+  vless-ws-tls)
+    uuid="$(secret_value "$tag" "uuid")"
+    ws_path="$(node_value "$tag" "ws_path")"
+    preferred_domain="$(node_value "$tag" "preferred_domain")"
+    host_domain="$(node_value "$tag" "host_domain")"
+    cert_mode="$(node_value "$tag" "certificate_mode")"
+    printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
+      "$uuid" "$(wrap_host "$preferred_domain")" "$port" "$host_domain" "$host_domain" "$(url_encode "$ws_path")"
+    if [ "$cert_mode" = "self-signed" ]; then
+      printf '&allowInsecure=1'
+    fi
+    printf '#%s' "$(url_encode "$name")"
+    ;;
+  anytls)
+    password="$(secret_value "$tag" "password")"
+    tls_server="$(node_value "$tag" "tls_server")"
+    cert_mode="$(node_value "$tag" "certificate_mode")"
+    printf 'anytls://%s@%s:%s?security=tls&sni=%s' \
+      "$(url_encode "$password")" "$host" "$port" "$tls_server"
+    if [ "$cert_mode" = "self-signed" ]; then
+      printf '&allowInsecure=1'
+    fi
+    printf '#%s' "$(url_encode "$name")"
+    ;;
+  vless-argo)
+    uuid="$(secret_value "$tag" "uuid")"
+    ws_path="$(node_value "$tag" "ws_path")"
+    preferred_domain="$(node_value "$tag" "preferred_domain")"
+    endpoint_domain="$(node_value "$tag" "endpoint_domain")"
+    [ -n "$endpoint_domain" ] || endpoint_domain="待分配.example.com"
+    printf 'vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
+      "$uuid" "$(wrap_host "$preferred_domain")" "$endpoint_domain" "$endpoint_domain" "$(url_encode "$ws_path")" "$(url_encode "$name")"
+    ;;
+  tuic-v5)
+    uuid="$(secret_value "$tag" "uuid")"
+    password="$(secret_value "$tag" "password")"
+    tls_server="$(node_value "$tag" "tls_server")"
+    cert_mode="$(node_value "$tag" "certificate_mode")"
+    printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&alpn=h3&sni=%s' \
+      "$uuid" "$(url_encode "$password")" "$host" "$port" "$tls_server"
+    if [ "$cert_mode" = "self-signed" ]; then
+      printf '&allow_insecure=1'
+    fi
+    printf '#%s' "$(url_encode "$name")"
+    ;;
+  hy2)
+    password="$(secret_value "$tag" "password")"
+    tls_server="$(node_value "$tag" "tls_server")"
+    cert_mode="$(node_value "$tag" "certificate_mode")"
+    printf 'hysteria2://%s@%s:%s?sni=%s' \
+      "$(url_encode "$password")" "$host" "$port" "$tls_server"
+    if [ "$cert_mode" = "self-signed" ]; then
+      printf '&insecure=1'
+    fi
+    printf '#%s' "$(url_encode "$name")"
+    ;;
+  socks5)
+    username="$(node_value "$tag" "username")"
+    password="$(secret_value "$tag" "password")"
+    printf 'socks5://%s:%s@%s:%s#%s' \
+      "$(url_encode "$username")" "$(url_encode "$password")" "$host" "$port" "$(url_encode "$name")"
+    ;;
   esac
 }
 
