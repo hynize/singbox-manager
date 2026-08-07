@@ -7,19 +7,19 @@
 发布版安装脚本：
 
 ```text
-https://github.com/hynize/singbox-manager/releases/download/v0.2.7/install.sh
+https://github.com/hynize/singbox-manager/releases/download/v0.2.8/install.sh
 ```
 
 快速安装：
 
 ```bash
-bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.7/install.sh)
+bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.8/install.sh)
 ```
 
 更安全的两步安装：
 
 ```bash
-curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.7/install.sh
+curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.8/install.sh
 bash install.sh
 ```
 
@@ -121,8 +121,8 @@ sbm
 ### 安装链路
 
 - `install.sh` 不再直接拉取 `main` 分支脚本。
-- 安装器固定到发布版本 `v0.2.7`。
-- 安装内容来自 release bundle：`singbox-manager-v0.2.7.tar.gz`
+- 安装器固定到发布版本 `v0.2.8`。
+- 安装内容来自 release bundle：`singbox-manager-v0.2.8.tar.gz`
 - 安装器会对 bundle 做 SHA256 校验后再解包。
 
 ### 公共逻辑层

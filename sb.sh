@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.7"
+SCRIPT_VERSION="0.2.8"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -368,6 +368,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=${WATCHDOG_TARGET}
+KillMode=process
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes
