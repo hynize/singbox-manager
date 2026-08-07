@@ -31,6 +31,8 @@ LOCK_HELD=false
 LOCK_FD=""
 LOCK_DIR_FALLBACK="${LOCK_FILE}.d"
 PUBLIC_IP_CACHE="${PUBLIC_IP_CACHE:-}"
+HAS_PUBLIC_IPV4=""
+CLOUDFLARED_LATEST_CACHE=""
 
 print_ok() {
   echo -e "${COLOR_GREEN}[成功]${COLOR_RESET} $*"
@@ -407,7 +409,7 @@ ensure_tls_material() {
 
 parse_trycloudflare_domain() {
   local log_file="$1"
-  grep -aoE 'https://[-a-z0-9]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -n 1 | sed 's#https://##'
+  grep -aoE '[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -n 1
 }
 
 wait_for_trycloudflare_domain() {
@@ -428,6 +430,69 @@ wait_for_trycloudflare_domain() {
   done
 
   return 1
+}
+
+has_public_ipv4() {
+  if [ -n "${HAS_PUBLIC_IPV4}" ]; then
+    [ "${HAS_PUBLIC_IPV4}" = "yes" ]
+    return
+  fi
+
+  local ip
+  ip="$(curl -fsS --max-time 5 --ipv4 "https://api64.ipify.org" 2>/dev/null | tr -d '\r\n' || true)"
+  if is_ip_address "${ip}" && ! is_private_ip "${ip}"; then
+    HAS_PUBLIC_IPV4="yes"
+    return 0
+  fi
+
+  HAS_PUBLIC_IPV4="no"
+  return 1
+}
+
+argo_edge_ip_version() {
+  if has_public_ipv4; then
+    printf '4'
+  else
+    printf '6'
+  fi
+}
+
+cloudflared_latest_release_json() {
+  if [ -n "${CLOUDFLARED_LATEST_CACHE}" ]; then
+    printf '%s' "${CLOUDFLARED_LATEST_CACHE}"
+    return 0
+  fi
+
+  local json
+  json="$(curl -fsSL --retry 3 --retry-delay 2 --max-time 30 -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/cloudflare/cloudflared/releases/latest" 2>/dev/null || true)"
+  [ -n "${json}" ] || return 1
+
+  CLOUDFLARED_LATEST_CACHE="${json}"
+  printf '%s' "${json}"
+}
+
+cloudflared_latest_version() {
+  local json tag
+  json="$(cloudflared_latest_release_json)" || return 1
+  tag="$(printf '%s' "${json}" | jq -r '.tag_name // empty')"
+  [ -n "${tag}" ] || return 1
+  printf '%s' "${tag}"
+}
+
+cloudflared_latest_digest() {
+  local asset="$1"
+  local json digest
+  json="$(cloudflared_latest_release_json)" || return 1
+  digest="$(printf '%s' "${json}" | jq -r --arg name "${asset}" '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://')"
+  [ -n "${digest}" ] || return 1
+  printf '%s' "${digest}"
+}
+
+cloudflared_installed_version() {
+  local out
+  out="$("${CLOUDFLARED_BIN}" version 2>/dev/null | head -n 1 || true)"
+  printf '%s' "${out#cloudflared version }"
 }
 
 write_pid_file() {

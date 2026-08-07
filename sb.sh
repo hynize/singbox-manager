@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.6"
+SCRIPT_VERSION="0.2.7"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -293,18 +293,32 @@ install_singbox_core() {
 }
 
 install_cloudflared_bin() {
-  local arch asset url tmpfile expected
+  local arch asset url tmpfile expected version
   arch="$(detect_arch)" || fatal "暂不支持当前 CPU 架构：$(uname -m)"
   asset="${CLOUDFLARED_ASSET[$arch]:-}"
-  expected="${CLOUDFLARED_SHA256[$arch]:-}"
   [ -n "${asset}" ] || fatal "未配置 ${arch} 对应的 cloudflared 安装包。"
-  [ -n "${expected}" ] || fatal "未配置 ${arch} 对应的 cloudflared 校验值。"
 
-  url="https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${asset}"
+  version="${CLOUDFLARED_VERSION:-}"
+  expected="${CLOUDFLARED_SHA256[$arch]:-}"
+  if [ "${CLOUDFLARED_LATEST:-false}" = "true" ]; then
+    if version="$(cloudflared_latest_version)"; then
+      expected="$(cloudflared_latest_digest "${asset}" || true)"
+      print_info "cloudflared 官方最新版本：${version}"
+    else
+      print_warn "无法从 GitHub API 获取 cloudflared 最新版本，回退到固定版本 ${version:-未知}。"
+    fi
+  fi
+  [ -n "${version}" ] || fatal "未配置 cloudflared 版本。"
+
+  url="https://github.com/cloudflare/cloudflared/releases/download/${version}/${asset}"
   tmpfile="$(mktemp)"
-  print_info "正在安装 cloudflared ${CLOUDFLARED_VERSION} (${arch})"
+  print_info "正在安装 cloudflared ${version} (${arch})"
   download_file "${url}" "${tmpfile}"
-  verify_sha256 "${tmpfile}" "${expected}"
+  if [ -n "${expected}" ]; then
+    verify_sha256 "${tmpfile}" "${expected}"
+  else
+    print_warn "未获取到 cloudflared 校验和，已跳过完整性校验。"
+  fi
   install -m 0755 "${tmpfile}" "${CLOUDFLARED_BIN}"
   ensure_binary_runs "${CLOUDFLARED_BIN}" "cloudflared" version
   rm -f "${tmpfile}"
@@ -702,6 +716,7 @@ rollback_new_node() {
   delete_node_records "$tag" || true
   remove_node_certificates "$tag" "$cert_file" "$key_file"
   render_config || true
+  start_service || true
 }
 
 save_node_bundle() {
@@ -955,7 +970,7 @@ stop_argo_node() {
 
 start_argo_node() {
   local tag="$1"
-  local mode port token log_file pid_file domain
+  local mode port token log_file pid_file domain edge_ip
 
   [ -x "${CLOUDFLARED_BIN}" ] || install_cloudflared_bin
   mode="$(node_value "$tag" "argo_mode")"
@@ -967,15 +982,17 @@ start_argo_node() {
   : >"${log_file}"
   chmod 600 "${log_file}"
 
+  edge_ip="$(argo_edge_ip_version)"
+
   if [ "${mode}" = "token" ]; then
     token="$(secret_value "$tag" "argo_token")"
-    nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version auto run --token "${token}" \
+    nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run --token "${token}" \
       >"${log_file}" 2>&1 &
     write_pid_file "${pid_file}" "$!"
     return 0
   fi
 
-  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version auto --url "http://127.0.0.1:${port}" \
+  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${port}" \
     >"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 
@@ -1428,8 +1445,8 @@ show_status() {
   else
     echo "守护方式：cron"
   fi
-  echo "锁定 sing-box 版本：${SINGBOX_VERSION}"
-  echo "锁定 cloudflared 版本：${CLOUDFLARED_VERSION}"
+  echo "sing-box 版本：${SINGBOX_VERSION}"
+  echo "cloudflared 版本：$(cloudflared_installed_version)"
   echo
   print_node_list
   echo

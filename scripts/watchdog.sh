@@ -83,14 +83,15 @@ ensure_singbox() {
 
 start_temp_tunnel() {
   local tag="$1"
-  local local_port pid_file log_file domain
+  local local_port pid_file log_file domain edge_ip
   local_port="$(node_value "$tag" "port")"
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
   : >"${log_file}"
   chmod 600 "${log_file}"
-  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version auto --url "http://127.0.0.1:${local_port}" \
+  edge_ip="$(argo_edge_ip_version)"
+  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${local_port}" \
     >"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 
@@ -113,14 +114,15 @@ start_temp_tunnel() {
 
 start_token_tunnel() {
   local tag="$1"
-  local token pid_file log_file
+  local token pid_file log_file edge_ip
   token="$(secret_value "$tag" "argo_token")"
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
   : >"${log_file}"
   chmod 600 "${log_file}"
-  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version auto run --token "${token}" \
+  edge_ip="$(argo_edge_ip_version)"
+  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run --token "${token}" \
     >"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 }

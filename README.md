@@ -7,19 +7,19 @@
 发布版安装脚本：
 
 ```text
-https://github.com/hynize/singbox-manager/releases/download/v0.2.6/install.sh
+https://github.com/hynize/singbox-manager/releases/download/v0.2.7/install.sh
 ```
 
 快速安装：
 
 ```bash
-bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.6/install.sh)
+bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.7/install.sh)
 ```
 
 更安全的两步安装：
 
 ```bash
-curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.6/install.sh
+curl -fsSLO https://github.com/hynize/singbox-manager/releases/download/v0.2.7/install.sh
 bash install.sh
 ```
 
@@ -48,6 +48,7 @@ sbm
 - 支持日志轮转
 - 支持 `OpenRC`
 - 支持发布版自更新
+- `VLESS + Argo` 自动识别纯 IPv6 机器，强制走 IPv6 边缘节点
 
 ## 交互目录设计
 
@@ -120,8 +121,8 @@ sbm
 ### 安装链路
 
 - `install.sh` 不再直接拉取 `main` 分支脚本。
-- 安装器固定到发布版本 `v0.2.6`。
-- 安装内容来自 release bundle：`singbox-manager-v0.2.6.tar.gz`
+- 安装器固定到发布版本 `v0.2.7`。
+- 安装内容来自 release bundle：`singbox-manager-v0.2.7.tar.gz`
 - 安装器会对 bundle 做 SHA256 校验后再解包。
 
 ### 公共逻辑层
@@ -247,17 +248,18 @@ sbm
 - 默认 `set -eEuo pipefail`
 - 默认 `umask 077`
 - `nodes.json`、`secrets.json`、`config.json`、证书私钥、运行时 pid 全部按最小权限落盘
-- 上游 `sing-box` 与 `cloudflared` 采用固定版本和固定 SHA256
+- 上游 `sing-box` 采用固定版本和固定 SHA256
+- `cloudflared` 跟随官方最新版（通过 GitHub API 获取最新版本与官方 digest 校验），API 不可用时回退到内置固定版本
 - release bundle 可复现，CI 会执行：
   - `shellcheck`
   - `bash -n`
   - `shfmt -d`
   - release bundle 构建
 
-## 当前固定版本
+## 当前版本
 
-- `sing-box`: `v1.13.8`
-- `cloudflared`: `2026.3.0`
+- `sing-box`: `v1.13.16`（固定）
+- `cloudflared`: 跟随官方最新版（内置回退版本 `2026.7.3`）
 
 详细版本与校验和位于 `metadata/upstream.env`。
 

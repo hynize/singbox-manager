@@ -5,9 +5,9 @@ umask 077
 
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
-PROJECT_VERSION="v0.2.6"
-PACKAGE_NAME="singbox-manager-v0.2.6.tar.gz"
-PACKAGE_SHA256="03aa527d5ad89d33eff96ff3c2d0d6d26cd2e2e7c245c2318e1103886ce910aa"
+PROJECT_VERSION="v0.2.7"
+PACKAGE_NAME="singbox-manager-v0.2.7.tar.gz"
+PACKAGE_SHA256="277d8715699dae570c806a821db998753f272a0278bac62c76087db03c4889dd"
 PACKAGE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${PROJECT_VERSION}/${PACKAGE_NAME}"
 
 INSTALL_BIN="/usr/local/bin/sbm"
