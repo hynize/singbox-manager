@@ -28,5 +28,11 @@ jobs:
       - name: Formatting
         run: shfmt -i 2 -d install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
 
+      - name: No CRLF
+        run: |
+          if grep -rlP '\r' install.sh sb.sh lib metadata scripts VERSION README.md .github 2>/dev/null; then
+            echo "Found CRLF line endings in shell scripts"; exit 1
+          fi
+
       - name: Build Bundle
         run: bash scripts/build-release-bundle.sh
