@@ -368,6 +368,42 @@ url_encode() {
   jq -nr --arg s "$1" '$s|@uri'
 }
 
+# 域名/SNI 输入白名单：字母数字 . _ : -（冒号用于 IPv6），拒绝空格与 URI 特殊字符
+is_safe_domain() {
+  local value="$1"
+  [ -n "${value}" ] || return 1
+  [[ "${value}" =~ ^[A-Za-z0-9._:-]+$ ]] || return 1
+  [[ "${value}" =~ ^[A-Za-z0-9] ]] || return 1
+  [[ "${value}" =~ [A-Za-z0-9]$ ]] || return 1
+  return 0
+}
+
+# 环境变量域名读取：非法值告警并回退默认（用于一键安装，避免脏输入进链接）
+env_domain_or_default() {
+  local __ed_key="$1"
+  local __ed_default="$2"
+  local __ed_value
+  __ed_value="$(env_var "$__ed_key")"
+  if [ -z "${__ed_value}" ]; then
+    printf '%s' "${__ed_default}"
+    return 0
+  fi
+  if is_safe_domain "${__ed_value}"; then
+    printf '%s' "${__ed_value}"
+  else
+    print_warn "环境变量 ${__ed_key}=${__ed_value} 域名格式无效，已回退默认值 ${__ed_default}。"
+    printf '%s' "${__ed_default}"
+  fi
+}
+
+# 监听 :: 在 net.ipv6.bindv6only=1 时不接受 IPv4 连接，与默认 IPv4 分享链接不匹配
+warn_if_bindv6only() {
+  if [ -r /proc/sys/net/ipv6/bindv6only ] &&
+    [ "$(cat /proc/sys/net/ipv6/bindv6only 2>/dev/null || printf 0)" = "1" ]; then
+    print_warn "检测到 net.ipv6.bindv6only=1：入站监听 :: 不会接受 IPv4 连接，IPv4 分享链接可能不可达。"
+  fi
+}
+
 is_ip_address() {
   local ip="$1" octet
   # IPv4：四组 0-255（兼容前导零）
@@ -666,18 +702,49 @@ write_pid_file() {
 
 read_pid_file() {
   local pid_file="$1"
+  local content
   [ -f "$pid_file" ] || return 1
-  tr -d '\r\n' <"$pid_file"
+  content="$(tr -d ' \r\n' <"$pid_file")"
+  # PID 文件只接受纯数字，拒绝负数、特殊值与被污染的内容
+  [[ "${content}" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "${content}"
+}
+
+# 校验 PID 是否仍指向预期二进制，防止进程死亡后 PID 被复用而误杀无关进程
+pid_matches_binary() {
+  local pid="$1"
+  local binary="$2"
+  [ -n "${pid}" ] && [ -n "${binary}" ] || return 1
+  local exe=""
+  exe="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
+  [ -n "${exe}" ] || return 1
+  [ "${exe}" = "${binary}" ]
 }
 
 kill_pid_file() {
   local pid_file="$1"
-  local pid=""
-  pid="$(read_pid_file "$pid_file" 2>/dev/null || true)"
-  if [ -n "$pid" ]; then
-    kill "$pid" >/dev/null 2>&1 || true
+  local expect="${2:-}"
+  local pid
+  pid="$(read_pid_file "${pid_file}" 2>/dev/null || true)"
+  rm -f "${pid_file}"
+  [ -n "${pid}" ] || return 0
+
+  # 提供预期二进制时先做身份校验（需 /proc，root 下可用）
+  if [ -n "${expect}" ] && [ -d /proc ] && ! pid_matches_binary "${pid}" "${expect}"; then
+    if kill -0 "${pid}" 2>/dev/null; then
+      print_warn "PID ${pid} 已不属于 ${expect}（疑似 PID 复用），跳过终止。"
+    fi
+    return 0
   fi
-  rm -f "$pid_file"
+
+  kill "${pid}" >/dev/null 2>&1 || return 0
+  # TERM 后等待退出，最多 5 秒，仍存活则 KILL
+  for _ in 1 2 3 4 5; do
+    kill -0 "${pid}" 2>/dev/null || return 0
+    sleep 1
+  done
+  kill -9 "${pid}" >/dev/null 2>&1 || true
+  return 0
 }
 
 rotate_log_file() {
@@ -731,9 +798,9 @@ build_share_link() {
   case "$protocol" in
   vless-reality)
     uuid="$(secret_value "$tag" "uuid")"
-    reality_server="$(node_value "$tag" "reality_server")"
-    public_key="$(node_value "$tag" "public_key")"
-    short_id="$(node_value "$tag" "short_id")"
+    reality_server="$(url_encode "$(node_value "$tag" "reality_server")")"
+    public_key="$(url_encode "$(node_value "$tag" "public_key")")"
+    short_id="$(url_encode "$(node_value "$tag" "short_id")")"
     printf 'vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#%s' \
       "$uuid" "$host" "$port" "$reality_server" "$public_key" "$short_id" "$(url_encode "$name")"
     ;;
@@ -747,7 +814,8 @@ build_share_link() {
       print_warn "WS-TLS 节点 ${tag} 使用默认优选域名 ${DEFAULT_CDN_DOMAIN}：仅当该域名已接入本机前置 CDN 时可用，否则请把 cdn_host 设为你自己的域名。"
     fi
     printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
-      "$uuid" "$(wrap_host "$preferred_domain")" "$port" "$host_domain" "$host_domain" "$(url_encode "$ws_path")"
+      "$uuid" "$(wrap_host "$(url_encode "$preferred_domain")")" "$port" \
+      "$(url_encode "$host_domain")" "$(url_encode "$host_domain")" "$(url_encode "$ws_path")"
     if [ "$cert_mode" = "self-signed" ]; then
       printf '&allowInsecure=1'
     fi
@@ -755,7 +823,7 @@ build_share_link() {
     ;;
   anytls)
     password="$(secret_value "$tag" "password")"
-    tls_server="$(node_value "$tag" "tls_server")"
+    tls_server="$(url_encode "$(node_value "$tag" "tls_server")")"
     cert_mode="$(node_value "$tag" "certificate_mode")"
     printf 'anytls://%s@%s:%s?security=tls&sni=%s' \
       "$(url_encode "$password")" "$host" "$port" "$tls_server"
@@ -774,12 +842,13 @@ build_share_link() {
       return 0
     fi
     printf 'vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
-      "$uuid" "$(wrap_host "$preferred_domain")" "$endpoint_domain" "$endpoint_domain" "$(url_encode "$ws_path")" "$(url_encode "$name")"
+      "$uuid" "$(wrap_host "$(url_encode "$preferred_domain")")" \
+      "$(url_encode "$endpoint_domain")" "$(url_encode "$endpoint_domain")" "$(url_encode "$ws_path")" "$(url_encode "$name")"
     ;;
   tuic-v5)
     uuid="$(secret_value "$tag" "uuid")"
     password="$(secret_value "$tag" "password")"
-    tls_server="$(node_value "$tag" "tls_server")"
+    tls_server="$(url_encode "$(node_value "$tag" "tls_server")")"
     cert_mode="$(node_value "$tag" "certificate_mode")"
     printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&alpn=h3&sni=%s' \
       "$uuid" "$(url_encode "$password")" "$host" "$port" "$tls_server"
@@ -790,7 +859,7 @@ build_share_link() {
     ;;
   hy2)
     password="$(secret_value "$tag" "password")"
-    tls_server="$(node_value "$tag" "tls_server")"
+    tls_server="$(url_encode "$(node_value "$tag" "tls_server")")"
     cert_mode="$(node_value "$tag" "certificate_mode")"
     printf 'hysteria2://%s@%s:%s?sni=%s' \
       "$(url_encode "$password")" "$host" "$port" "$tls_server"

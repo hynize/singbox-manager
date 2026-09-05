@@ -120,6 +120,27 @@ json_set_record "${NODES_FILE}" "n3" '{"protocol":"socks5","name":"SOCKS5","port
 json_set_record "${SECRETS_FILE}" "n3" '{"password":"pw456"}'
 assert_eval_true "socks5 链接含用户名密码" 'build_share_link n3 | grep -q "user:pw456@"'
 
+# --- 链接参数编码与域名校验（审查 F-09） ---
+json_set_record "${NODES_FILE}" "n9" '{"protocol":"vless-ws-tls","name":"EN&X","port":443,"preferred_domain":"cdn.example.com","host_domain":"a&b.com","ws_path":"/p","certificate_mode":"custom"}'
+json_set_record "${SECRETS_FILE}" "n9" '{"uuid":"u9"}'
+assert_eval_true "特殊字符 host 被编码" 'build_share_link n9 | grep -q "sni=a%26b.com"'
+assert_eval_true "特殊字符 name 被编码" 'build_share_link n9 | grep -q "EN%26X"'
+json_set_record "${NODES_FILE}" "nargo" '{"protocol":"vless-argo","name":"A","port":8001,"preferred_domain":"saas.sin.fan","ws_path":"/w","endpoint_domain":""}'
+json_set_record "${SECRETS_FILE}" "nargo" '{"uuid":"ua"}'
+assert_eq "空 endpoint 不生成失效链接" "" "$(build_share_link nargo)"
+assert_eval_true "is_safe_domain 合法域名" 'is_safe_domain cdn.example.com'
+assert_eval_true "is_safe_domain IPv6" 'is_safe_domain 2001:db8::1'
+assert_eval_false "is_safe_domain 含空格" 'is_safe_domain "a b.com"'
+assert_eval_false "is_safe_domain 含 &" 'is_safe_domain "a&b.com"'
+assert_eval_false "is_safe_domain 空值" 'is_safe_domain ""'
+
+# --- PID 文件严格校验（审查 F-03） ---
+printf 'abc\n' >"${RUNTIME_DIR}/bad.pid"
+assert_eval_false "非数字 PID 被拒绝" 'read_pid_file "${RUNTIME_DIR}/bad.pid"'
+printf ' 42 \n' >"${RUNTIME_DIR}/ws.pid"
+assert_eq "PID 去除空白" "42" "$(read_pid_file "${RUNTIME_DIR}/ws.pid")"
+rm -f "${RUNTIME_DIR}/bad.pid" "${RUNTIME_DIR}/ws.pid"
+
 # --- 自签证书与回退逻辑 ---
 assert_eval_true "ensure_tls_material 生成证书" 'pair="$(ensure_tls_material tag_tls www.bing.com)"; [ -f "${pair%|*}" ] && [ -f "${pair#*|}" ]'
 assert_eval_true "auto_cert_bundle 默认自签" 'auto_cert_bundle t_auto www.bing.com | grep -q "^self-signed|"'

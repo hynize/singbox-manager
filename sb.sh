@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.12"
+SCRIPT_VERSION="0.2.13"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -131,6 +131,21 @@ prompt_positive_integer() {
       return 0
     fi
     print_warn "${prompt} 必须是大于 0 的整数。"
+  done
+}
+
+# 域名/SNI 交互输入：循环直至通过白名单校验
+prompt_safe_domain() {
+  local prompt="$1"
+  local default="$2"
+  local value
+  while true; do
+    value="$(prompt_with_default "${prompt}" "${default}")"
+    if is_safe_domain "${value}"; then
+      printf '%s' "${value}"
+      return 0
+    fi
+    print_warn "域名格式无效：${value}（仅允许字母数字与 . _ : -）"
   done
 }
 
@@ -280,11 +295,19 @@ install_release_bundle() {
     rm -rf "${tmpdir}"
     fatal "发布包结构异常：未找到根目录。"
   }
+
+  # 安装前先校验候选脚本，避免中断/半写入造成新旧版本混装
+  if ! bash -n "${root_dir}/sb.sh" || ! bash -n "${root_dir}/lib/common.sh" || ! bash -n "${root_dir}/scripts/watchdog.sh"; then
+    rm -rf "${tmpdir}"
+    fatal "发布包脚本语法校验失败，已取消安装（原文件未改动）。"
+  fi
+
   install -d -m 700 "${LIB_DIR}" "${BASE_DIR}"
-  install -m 0755 "${root_dir}/sb.sh" "${INSTALL_BIN}"
+  # 先装共享库与 watchdog，最后装入口 sbm，保证入口加载到配套实现
   install -m 0644 "${root_dir}/lib/common.sh" "${LIB_DIR}/common.sh"
   install -m 0644 "${root_dir}/metadata/upstream.env" "${UPSTREAM_ENV}"
   install -m 0755 "${root_dir}/scripts/watchdog.sh" "${WATCHDOG_TARGET}"
+  install -m 0755 "${root_dir}/sb.sh" "${INSTALL_BIN}"
   sanitize_permissions
   rm -rf "${tmpdir}"
 }
@@ -502,9 +525,9 @@ stop_service() {
     systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
   elif [ "${has_openrc}" = true ]; then
     rc-service "${SERVICE_NAME}" stop >/dev/null 2>&1 || true
-    kill_pid_file "${PID_FILE}"
+    kill_pid_file "${PID_FILE}" "${SINGBOX_BIN}"
   else
-    kill_pid_file "${PID_FILE}"
+    kill_pid_file "${PID_FILE}" "${SINGBOX_BIN}"
   fi
 }
 
@@ -513,6 +536,7 @@ start_service() {
   [ -x "${SINGBOX_BIN}" ] || fatal "尚未安装 sing-box。"
   rotate_log_file "${BASE_DIR}/logs/sing-box.log" || true
   "${SINGBOX_BIN}" check -c "${CONFIG_FILE}" >/dev/null
+  warn_if_bindv6only
 
   if [ "${has_systemd}" = true ]; then
     systemctl daemon-reload
@@ -996,7 +1020,7 @@ render_inbound_for_tag() {
 
 stop_argo_node() {
   local tag="$1"
-  kill_pid_file "${BASE_DIR}/runtime/${tag}.pid"
+  kill_pid_file "${BASE_DIR}/runtime/${tag}.pid" "${CLOUDFLARED_BIN}"
 }
 
 start_argo_node() {
@@ -1012,6 +1036,9 @@ start_argo_node() {
   stop_argo_node "$tag"
   : >"${log_file}"
   chmod 600 "${log_file}"
+
+  # 启动前清空旧域名：隧道失败时分享链接不再显示失效地址
+  json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
 
   edge_ip="$(argo_edge_ip_version)"
 
@@ -1035,6 +1062,7 @@ start_argo_node() {
     fi
   else
     cleanup_argo_pid "${pid_file}"
+    json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
     print_err "等待 ${tag} 的临时 Argo 域名超时。"
     return 1
   fi
@@ -1060,7 +1088,7 @@ add_vless_reality() {
   name="$(prompt_with_default "节点名称" "VLESS-Reality")"
   uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
-  reality_server="$(prompt_with_default "Reality 域名" "${DEFAULT_REALITY_SERVER}")"
+  reality_server="$(prompt_safe_domain "Reality 域名" "${DEFAULT_REALITY_SERVER}")"
 
   key_output="$("${SINGBOX_BIN}" generate reality-keypair)"
   private_key="$(printf '%s\n' "$key_output" | sed -n 's/^PrivateKey:[[:space:]]*//p' | head -n 1)"
@@ -1108,8 +1136,8 @@ add_vless_ws_tls() {
   name="$(prompt_with_default "节点名称" "VLESS-WS-TLS")"
   uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
-  preferred_domain="$(prompt_with_default "优选域名" "${DEFAULT_CDN_DOMAIN}")"
-  host_domain="$(prompt_with_default "Host/SNI 域名" "${DEFAULT_TLS_SERVER}")"
+  preferred_domain="$(prompt_safe_domain "优选域名" "${DEFAULT_CDN_DOMAIN}")"
+  host_domain="$(prompt_safe_domain "Host/SNI 域名" "${DEFAULT_TLS_SERVER}")"
   ws_path="$(prompt_with_default "WebSocket 路径" "$(random_ws_path)")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$host_domain")"
   cert_mode="${cert_bundle%%|*}"
@@ -1160,7 +1188,7 @@ add_anytls() {
   name="$(prompt_with_default "节点名称" "AnyTLS")"
   password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$(generate_hex 8)}"
-  tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
+  tls_server="$(prompt_safe_domain "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1206,12 +1234,18 @@ add_vless_argo() {
   name="$(prompt_with_default "节点名称" "VLESS-Argo")"
   uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
-  preferred_domain="$(prompt_with_default "优选域名" "${DEFAULT_CDN_DOMAIN}")"
+  preferred_domain="$(prompt_safe_domain "优选域名" "${DEFAULT_CDN_DOMAIN}")"
   ws_path="$(prompt_with_default "WebSocket 路径" "$(random_ws_path)")"
   argo_mode="$(prompt_choice "隧道模式 (temp/token)" "temp")"
   if [ "${argo_mode}" = "token" ]; then
     argo_token="$(prompt_nonempty "Cloudflared 隧道 Token")"
     endpoint_domain="$(prompt_nonempty "Argo 回源域名")"
+    if ! is_safe_domain "${endpoint_domain}"; then
+      print_warn "回源域名格式无效：${endpoint_domain}，已回退临时隧道。"
+      argo_mode="temp"
+      argo_token=""
+      endpoint_domain=""
+    fi
   else
     argo_mode="temp"
     argo_token=""
@@ -1261,7 +1295,7 @@ add_tuic_v5() {
   uuid="${uuid:-$(generate_uuid)}"
   password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$uuid}"
-  tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
+  tls_server="$(prompt_safe_domain "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1307,7 +1341,7 @@ add_hy2() {
   name="$(prompt_with_default "节点名称" "Hysteria2")"
   password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$(generate_hex 8)}"
-  tls_server="$(prompt_with_default "SNI 域名" "${DEFAULT_TLS_SERVER}")"
+  tls_server="$(prompt_safe_domain "SNI 域名" "${DEFAULT_TLS_SERVER}")"
   up_mbps="$(prompt_positive_integer "上行带宽 Mbps" 200)"
   down_mbps="$(prompt_positive_integer "下行带宽 Mbps" 200)"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
@@ -1879,13 +1913,14 @@ auto_install() {
   ENV_NAME="$(env_var "name")"
   ENV_UUID="$(env_var "uuid")"
   ENV_PASSWD="$(env_var "passwd")"
-  ENV_VL_SNI="$(env_var "vl_sni")"
-  ENV_TU_SNI="$(env_var "tu_sni")"
-  ENV_ANY_SNI="$(env_var "any_sni")"
-  ENV_HY_SNI="$(env_var "hy_sni")"
-  ENV_WS_HOST="$(env_var "ws_host")"
+  # 域名类环境变量经白名单校验，非法值回退内置默认
+  ENV_VL_SNI="$(env_domain_or_default "vl_sni" "${DEFAULT_REALITY_SERVER}")"
+  ENV_TU_SNI="$(env_domain_or_default "tu_sni" "${DEFAULT_TLS_SERVER}")"
+  ENV_ANY_SNI="$(env_domain_or_default "any_sni" "${DEFAULT_TLS_SERVER}")"
+  ENV_HY_SNI="$(env_domain_or_default "hy_sni" "${DEFAULT_TLS_SERVER}")"
+  ENV_WS_HOST="$(env_domain_or_default "ws_host" "${DEFAULT_TLS_SERVER}")"
   ENV_WS_PATH="$(env_var "ws_path")"
-  ENV_CDN_HOST="$(env_var "cdn_host")"
+  ENV_CDN_HOST="$(env_domain_or_default "cdn_host" "${DEFAULT_CDN_DOMAIN}")"
   ENV_SOCKS5_USER="$(env_var "socks5_username")"
   ENV_SOCKS5_PASS="$(env_var "socks5_password")"
 

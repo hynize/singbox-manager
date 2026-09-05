@@ -72,7 +72,7 @@ ensure_singbox() {
 
   if [ "${has_openrc}" = true ]; then
     if ! rc-service "${SERVICE_NAME}" status >/dev/null 2>&1; then
-      kill_pid_file "${PID_FILE}"
+      kill_pid_file "${PID_FILE}" "${SINGBOX_BIN}"
       rc-service "${SERVICE_NAME}" restart >/dev/null 2>&1 || rc-service "${SERVICE_NAME}" start >/dev/null 2>&1 || true
     fi
     return 0
@@ -97,6 +97,10 @@ start_temp_tunnel() {
 
   : >>"${log_file}"
   chmod 600 "${log_file}"
+  # 启动前清空旧域名：隧道失败时分享链接不再显示失效地址
+  acquire_lock
+  json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
+  release_lock
   edge_ip="$(argo_edge_ip_version)"
   # 追加模式写入（O_APPEND）：轮转截断后写入偏移自动归零，避免稀疏文件
   nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${local_port}" \
@@ -116,7 +120,10 @@ start_temp_tunnel() {
     release_lock
   else
     kill_pid_file "${pid_file}"
-    print_warn "等待 ${tag} 的临时 Argo 域名超时。"
+    acquire_lock
+    json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
+    release_lock
+    print_warn "等待 ${tag} 的临时 Argo 域名超时，已清除旧域名。"
   fi
 }
 

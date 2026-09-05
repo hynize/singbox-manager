@@ -5,10 +5,10 @@ umask 077
 
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
-PROJECT_VERSION="v0.2.12"
-PACKAGE_NAME="singbox-manager-v0.2.12.tar.gz"
+PROJECT_VERSION="v0.2.13"
+PACKAGE_NAME="singbox-manager-v0.2.13.tar.gz"
 # 发布流程：scripts/build-release-bundle.sh 构建可复现 bundle，其 SHA256 与此处一致
-PACKAGE_SHA256="d60b652f892575acca35feae7ded66d34c97d0c90544aa64da22f9769f1e1bd4"
+PACKAGE_SHA256="34992a68a3981a8ee0b622c8ed5effbb441925fc5b4285883d5138d5720195c4"
 PACKAGE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${PROJECT_VERSION}/${PACKAGE_NAME}"
 
 INSTALL_BIN="/usr/local/bin/sbm"
@@ -66,12 +66,25 @@ install_bundle() {
   tmpdir="$(mktemp -d)"
   tar -xzf "$bundle" -C "$tmpdir"
   root_dir="$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  if [ -z "$root_dir" ]; then
+    rm -rf "$tmpdir"
+    echo "发布包结构异常：未找到根目录。" >&2
+    exit 1
+  fi
+
+  # 安装前校验候选脚本语法，避免半写入造成混装
+  if ! bash -n "${root_dir}/sb.sh" || ! bash -n "${root_dir}/lib/common.sh" || ! bash -n "${root_dir}/scripts/watchdog.sh"; then
+    rm -rf "$tmpdir"
+    echo "发布包脚本语法校验失败，已取消安装。" >&2
+    exit 1
+  fi
 
   install -d -m 700 "$LIB_DIR" "$BASE_DIR"
-  install -m 0755 "${root_dir}/sb.sh" "${INSTALL_BIN}"
+  # 先装共享库与 watchdog，最后装入口 sbm
   install -m 0644 "${root_dir}/lib/common.sh" "${COMMON_LIB}"
   install -m 0644 "${root_dir}/metadata/upstream.env" "${UPSTREAM_ENV}"
   install -m 0755 "${root_dir}/scripts/watchdog.sh" "${WATCHDOG_PATH}"
+  install -m 0755 "${root_dir}/sb.sh" "${INSTALL_BIN}"
 
   chmod 0755 "${INSTALL_BIN}" "${WATCHDOG_PATH}"
   chmod 0644 "${COMMON_LIB}" "${UPSTREAM_ENV}"
