@@ -80,7 +80,7 @@ vlrt=2083 hypt=2082 name='HK' sbm rep
 
 线上地址：<https://sbm.1733.dpdns.org>
 
-`interface/` 目录提供一个纯静态单文件网页（单页设计：协议端口 + 全局配置 + Argo 隧道 + SOCKS5 账号 + 快捷指令速查一页搞定）：填协议端口与配置，实时生成一键 SSH 命令，支持深浅色主题、随机端口/UUID/密码生成。功能与部署方式源自 [singbox-tools-interface](https://github.com/hynize/singbox-tools-interface) 的同款设计。
+`interface/` 目录提供一个纯静态单文件网页（单页设计：协议端口 + 全局配置 + Argo 隧道 + SOCKS5 账号 + 快捷指令速查一页搞定）：填协议端口与配置，实时生成一键 SSH 命令，支持深浅色主题、随机端口/UUID/密码生成。其他 Linux 命令可查询 [pkg.tbbbk.com](https://pkg.tbbbk.com/)（180+ 应用一键安装命令）。
 
 两种部署任选：
 
