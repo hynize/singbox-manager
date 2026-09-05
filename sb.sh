@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.13"
+SCRIPT_VERSION="0.2.14"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -2219,7 +2219,7 @@ settings_menu() {
     echo "1. 分享链接默认 IP 版本   当前：$(ipver_display)"
     echo "0. 返回"
     echo
-    read -r -p "请选择: " choice
+    read -r -p "请选择: " choice || exit 0
     case "${choice}" in
     1)
       read -r -p "IP 版本 (4/v6/auto) [4]: " value
@@ -2241,7 +2241,7 @@ settings_menu() {
 }
 
 pause_menu() {
-  read -r -p "按回车继续..." _
+  read -r -p "按回车继续..." _ || true
 }
 
 main_menu() {
