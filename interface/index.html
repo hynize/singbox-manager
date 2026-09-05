@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Singbox-Manager 一键SSH命令生成器</title>
+  <style>
+    :root {
+      --bg:#0b1020;
+      --card:#121831;
+      --ink:#e9edf7;
+      --sub:#b7c1d9;
+      --line:#263255;
+      --acc:#4f7cff;
+      --acc-soft:rgba(79,124,255,.14);
+      --ok:#22c55e;
+      --warn:#f59e0b;
+      --err:#ef4444;
+      --input-bg:#0d1430;
+      --button-bg-dark:#1a2346;
+      --body-bg: linear-gradient(180deg, var(--bg) 0%, #0e1530 100%);
+    }
+    body.light-mode {
+      --bg:#f4f7fc;
+      --card:#ffffff;
+      --ink:#1a202c;
+      --sub:#4a5568;
+      --line:#dbe2ef;
+      --acc:#3b6cf6;
+      --acc-soft:rgba(59,108,246,.10);
+      --ok:#16a34a;
+      --warn:#d97706;
+      --err:#dc2626;
+      --input-bg:#ffffff;
+      --button-bg-dark:#e2e8f0;
+      --body-bg: var(--bg);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--body-bg);
+      color: var(--ink);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+      transition: background-color .3s, color .3s;
+    }
+    .wrap { max-width: 1450px; margin: 28px auto 40px; padding: 0 20px; }
+    a { color: var(--acc); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    header { position: relative; margin-bottom: 18px; display: flex; justify-content: center; align-items: center; flex-direction: column; }
+    header h1 { font-size: 34px; margin: 0 0 8px; text-align: center; }
+    header p { margin: 0; font-size: 14px; color: var(--sub); line-height: 1.7; text-align: center; }
+    .theme-btn {
+      position: absolute; top: 0; right: 0;
+      width: 42px; height: 42px; border-radius: 50%;
+      border: 1px solid var(--line); background: var(--card);
+      font-size: 20px; cursor: pointer; line-height: 1;
+      transition: transform .2s;
+    }
+    .theme-btn:hover { transform: rotate(20deg); }
+
+    .tabs { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 20px; }
+    .tab {
+      padding: 10px 18px; border-radius: 12px; cursor: pointer;
+      border: 1px solid var(--line); background: var(--card); color: var(--sub);
+      font-size: 15px; font-weight: 600; transition: all .2s;
+    }
+    .tab:hover { color: var(--ink); border-color: var(--acc); }
+    .tab.active { background: var(--acc); border-color: var(--acc); color: #fff; }
+    .tabpane { display: none; }
+    .tabpane.active { display: block; }
+
+    .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 20px; }
+    .grid + .grid { margin-top: 20px; }
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: rgba(127,157,255,.055);
+      backdrop-filter: blur(6px);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 20px;
+      transition: background-color .3s, border-color .3s;
+    }
+    body.light-mode .card { background: var(--card); box-shadow: 0 1px 3px rgba(15,23,42,.06); }
+    .card h2 { margin: 0 0 6px; font-size: 19px; }
+    .card h3 { margin: 16px 0 8px; font-size: 15px; color: var(--acc); }
+    .card h3:first-of-type { margin-top: 10px; }
+    .col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+    .col > .card:last-child { flex: 1 0 auto; }
+    .span2 { grid-column: 1 / -1; }
+    .tip { font-size: 12.5px; font-weight: 400; color: var(--sub); margin-left: 6px; }
+    .note { font-size: 12.5px; color: var(--sub); margin: 8px 0 0; line-height: 1.6; }
+    .note b { color: var(--warn); }
+
+    .row { display: grid; grid-template-columns: 205px 1fr; gap: 10px; align-items: center; margin: 10px 0; }
+    @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+    .row > label { font-size: 14.5px; text-align: left; }
+    .ctl { display: flex; gap: 8px; }
+    .ctl > input, .ctl > select { flex: 1; min-width: 0; }
+    .ctl > button { flex: 0 0 auto; }
+    input[type="text"], select, textarea {
+      width: 100%;
+      background: var(--input-bg);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      border-radius: 10px;
+      padding: 9px 12px;
+      font: 14px/1.4 ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+      outline: none;
+      transition: border-color .2s;
+    }
+    input[type="text"]:focus, select:focus, textarea:focus { border-color: var(--acc); }
+    input::placeholder { color: var(--sub); opacity: .65; }
+    input:disabled { opacity: .4; cursor: not-allowed; }
+    select { font-family: inherit; cursor: pointer; }
+    .pill {
+      display: inline-block; font-size: 11px; padding: 1px 7px; margin-left: 4px;
+      border-radius: 6px; border: 1px solid var(--line);
+      background: var(--acc-soft); color: var(--acc);
+      font-family: ui-monospace, Consolas, monospace; vertical-align: 1px;
+    }
+
+    .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+    @media (max-width: 700px) { .pgrid { grid-template-columns: 1fr; } }
+    .pitem label { display: block; font-size: 14px; margin-bottom: 4px; }
+    .sep { border-top: 1px dashed var(--line); margin: 14px 0 4px; }
+
+    button.primary, button.mini, button.ghost {
+      cursor: pointer; border-radius: 10px; font-size: 14px;
+      border: 1px solid var(--line); transition: all .2s;
+      font-family: inherit;
+    }
+    button.primary { background: var(--acc); color: #fff; border-color: var(--acc); padding: 9px 18px; font-weight: 600; }
+    button.primary:hover { filter: brightness(1.12); }
+    button.mini { background: var(--button-bg-dark); color: var(--ink); padding: 7px 12px; }
+    button.mini:hover { border-color: var(--acc); color: var(--acc); }
+    button.ghost { background: transparent; color: var(--sub); padding: 9px 18px; }
+    button.ghost:hover { color: var(--ink); border-color: var(--acc); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+
+    .cmdlist { display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px; }
+    @media (max-width: 900px) { .cmdlist { grid-template-columns: 1fr; } }
+    .crow {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 4px;
+      border-bottom: 1px dashed var(--line);
+    }
+    .crow code {
+      font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+      color: var(--ok); word-break: break-all; flex: 1;
+    }
+    .crow .cdesc { flex: 0 0 auto; max-width: 46%; font-size: 12.5px; color: var(--sub); }
+    .crow button { flex: 0 0 auto; font-size: 12px; padding: 4px 10px; border-radius: 8px; }
+
+    .out-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
+    .out-tools label { font-size: 14px; color: var(--sub); display: flex; align-items: center; gap: 6px; }
+    .out-tools select { width: auto; padding: 7px 10px; }
+    #cmd {
+      min-height: 150px; resize: vertical; white-space: pre;
+      font-size: 13.5px; line-height: 1.55;
+    }
+    .hint { font-size: 12.5px; color: var(--sub); margin: 8px 0 0; }
+
+    footer { margin-top: 26px; text-align: center; font-size: 13px; color: var(--sub); line-height: 1.8; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <button id="theme-btn" class="theme-btn" title="切换深色/浅色模式">☀️</button>
+    <h1>Singbox-Manager 🧰 一键SSH命令生成器</h1>
+    <p>
+      项目地址：<a href="https://github.com/hynize/singbox-manager" target="_blank">github.com/hynize/singbox-manager</a>
+      　|　其他命令查询：<a href="https://pkg.tbbbk.com/" target="_blank">pkg.tbbbk.com（Linux 应用安装器 · 180+ 应用一键安装命令）</a>
+    </p>
+  </header>
+
+  <!-- ================= Tab 1 : 一键安装命令 ================= -->
+  <section id="tab-sbm" class="tabpane active">
+    <div class="grid">
+      <div class="col">
+      <section class="card">
+        <h2>① 协议与端口 <span class="tip">填写端口即启用该协议，留空则不启用</span></h2>
+
+        <h3>直连协议（可自由组合）</h3>
+        <div class="pgrid">
+          <div class="pitem"><label>VLESS-Reality <span class="pill">vlrt</span></label><input type="text" class="port-input" id="vlrt" placeholder="如 2083，或点 🎲 随机" inputmode="numeric"></div>
+          <div class="pitem"><label>VLESS-WS-TLS <span class="pill">wspt</span></label><input type="text" class="port-input" id="wspt" placeholder="如 8443，或点 🎲 随机" inputmode="numeric"></div>
+          <div class="pitem"><label>TUIC v5 <span class="pill">tupt</span></label><input type="text" class="port-input" id="tupt" placeholder="如 10443，或点 🎲 随机" inputmode="numeric"></div>
+          <div class="pitem"><label>AnyTLS <span class="pill">anypt</span></label><input type="text" class="port-input" id="anypt" placeholder="如 5443，或点 🎲 随机" inputmode="numeric"></div>
+          <div class="pitem"><label>Hysteria2 <span class="pill">hypt</span></label><input type="text" class="port-input" id="hypt" placeholder="如 11443，或点 🎲 随机" inputmode="numeric"></div>
+          <div class="pitem"><label>SOCKS5 <span class="pill">socks5pt</span></label><input type="text" class="port-input" id="socks5pt" placeholder="如 31017，或点 🎲 随机" inputmode="numeric"></div>
+        </div>
+
+        <div class="sep"></div>
+        <h3>Argo CDN 协议（VLESS + Argo 隧道）</h3>
+        <div class="row">
+          <label>启用 Argo <span class="pill">argo</span></label>
+          <select id="argo">
+            <option value="">不启用 Argo</option>
+            <option value="vlpt">VLESS-WS + Argo（vlpt）</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Argo 本地端口 <span class="pill">argo_pt</span></label>
+          <input type="text" class="port-input" id="argo_pt" placeholder="默认 8001" inputmode="numeric" disabled>
+        </div>
+        <p class="note">Argo 支持临时隧道（无需填写任何 Token，域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，同时填写 <b>agn + agk</b>）。</p>
+      </section>
+
+      <section class="card">
+        <h2>③ SNI 与 WebSocket <span class="tip">留空使用内置默认值</span></h2>
+        <div class="row">
+          <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
+          <input type="text" id="vl_sni" placeholder="默认 www.apple.com">
+        </div>
+        <div class="row">
+          <label>WS Host/SNI 域名 <span class="pill">ws_host</span></label>
+          <input type="text" id="ws_host" placeholder="默认 www.bing.com">
+        </div>
+        <div class="row">
+          <label>WebSocket 路径 <span class="pill">ws_path</span></label>
+          <input type="text" id="ws_path" placeholder="留空自动生成随机路径（Argo/WS 共用）">
+        </div>
+        <div class="row">
+          <label>CF 优选域名 <span class="pill">cdn_host</span></label>
+          <input type="text" id="cdn_host" placeholder="WS-TLS 优选域名留空用本机IP；Argo 默认 saas.sin.fan">
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <label>TUIC SNI <span class="pill">tu_sni</span></label>
+          <input type="text" id="tu_sni" placeholder="默认 www.bing.com">
+        </div>
+        <div class="row">
+          <label>AnyTLS SNI <span class="pill">any_sni</span></label>
+          <input type="text" id="any_sni" placeholder="默认 www.bing.com">
+        </div>
+        <div class="row">
+          <label>Hysteria2 SNI <span class="pill">hy_sni</span></label>
+          <input type="text" id="hy_sni" placeholder="默认 www.bing.com">
+        </div>
+        <p class="note"><b>SNI 安全提示：</b>不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空（内置默认值）。</p>
+      </section>
+      </div>
+
+      <div class="col">
+      <section class="card">
+        <h2>② 全局配置</h2>
+        <div class="row">
+          <label>UUID <span class="pill">uuid</span></label>
+          <div class="ctl">
+            <input type="text" id="uuid" placeholder="留空自动生成（VLESS/TUIC 共用）">
+            <button type="button" class="mini" id="gen-uuid">生成</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>节点名称前缀 <span class="pill">name</span></label>
+          <input type="text" id="name" placeholder="如 HK，生成 HK-Reality / HK-HY2 等">
+        </div>
+        <div class="row">
+          <label>密码 <span class="pill">passwd</span></label>
+          <div class="ctl">
+            <input type="text" id="passwd" placeholder="留空自动生成（AnyTLS/HY2/TUIC）">
+            <button type="button" class="mini" id="gen-passwd">生成</button>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <label>证书模式 <span class="pill">cert</span></label>
+          <select id="cert">
+            <option value="self">self · 自签证书（默认）</option>
+            <option value="custom">custom · 导入自有证书</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>证书路径 <span class="pill">cert_path</span></label>
+          <input type="text" id="cert_path" placeholder="/etc/ssl/fullchain.pem" disabled>
+        </div>
+        <div class="row">
+          <label>私钥路径 <span class="pill">key_path</span></label>
+          <input type="text" id="key_path" placeholder="/etc/ssl/private.pem" disabled>
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <label>Hysteria2 上行 Mbps <span class="pill">up_mbps</span></label>
+          <input type="text" id="up_mbps" placeholder="默认 200" inputmode="numeric">
+        </div>
+        <div class="row">
+          <label>Hysteria2 下行 Mbps <span class="pill">down_mbps</span></label>
+          <input type="text" id="down_mbps" placeholder="默认 200" inputmode="numeric">
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>④ Argo 固定隧道 <span class="tip">临时隧道留空即可</span></h2>
+        <div class="row">
+          <label>固定隧道域名 <span class="pill">agn</span></label>
+          <input type="text" id="agn" placeholder="如 argo.example.com，留空为临时隧道">
+        </div>
+        <div class="row">
+          <label>隧道 Token <span class="pill">agk</span></label>
+          <input type="text" id="agk" placeholder="ey 开头字符串或 {…} JSON">
+        </div>
+        <p class="note">固定隧道需<b>同时填写</b> agn（回源域名）和 agk（Token），缺一则回退临时隧道。临时隧道的 trycloudflare 域名会变化，安装完成后用 <b>sbm list</b> 查看。</p>
+      </section>
+
+      <section class="card">
+        <h2>⑤ SOCKS5 账号 <span class="tip">仅在①填写 socks5pt 后生效</span></h2>
+        <div class="row">
+          <label>SOCKS5 用户名 <span class="pill">socks5_username</span></label>
+          <input type="text" id="socks5-username" placeholder="默认 user">
+        </div>
+        <div class="row">
+          <label>SOCKS5 密码 <span class="pill">socks5_password</span></label>
+          <div class="ctl">
+            <input type="text" id="socks5-password" placeholder="留空随机生成，或点右侧按钮">
+            <button type="button" class="mini" id="gen-s5pass">生成</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>⑥ 执行动作 <span class="pill">尾部参数</span></h2>
+        <div class="row">
+          <label>执行动作</label>
+          <select id="sbm-tail">
+            <option value="rep">rep · 覆盖式安装（清空已有节点后按上方配置重建）</option>
+            <option value="ins">ins · 追加式安装（保留已有节点，追加新节点）</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>命令形式</label>
+          <select id="cmd-form">
+            <option value="install">未安装 · 用安装脚本（自动下载并安装）</option>
+            <option value="sbm">已安装 · 直接调用 sbm 命令</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>安装源（仅安装脚本形式）</label>
+          <select id="install-src">
+            <option value="release">GitHub Release（推荐，带校验）</option>
+            <option value="raw">raw.githubusercontent.com/main</option>
+          </select>
+        </div>
+        <p class="note">rep 会先清空已有节点再重建，适合首次部署或重置配置；ins 保留已有节点，适合追加协议。两个动作都会自动安装/更新 sing-box 内核。</p>
+      </section>
+      </div>
+
+      <section class="card span2">
+        <h2>sbm 快捷指令速查 <span class="tip">安装完成后即可在服务器直接使用</span></h2>
+        <div class="cmdlist" id="sbm-cmds"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ================= 输出区 ================= -->
+  <div class="grid">
+    <section class="card span2">
+      <h2>生成的 SSH 一键命令 <span class="pill" id="out-script">sb.sh</span></h2>
+      <div class="out-tools">
+        <label>下载方式
+          <select id="dl">
+            <option value="curl">curl</option>
+            <option value="wget">wget</option>
+          </select>
+        </label>
+        <button id="copy" class="primary" type="button">📋 复制命令</button>
+        <button id="reset" class="ghost" type="button">♻️ 重置表单</button>
+      </div>
+      <textarea id="cmd" readonly spellcheck="false"></textarea>
+      <p class="hint">提示：整段复制粘贴到 SSH 终端回车即可执行（多行 \ 续行符已处理好）。字符串值已用英文单引号包裹，含特殊字符的密码也不会被截断；留空的项目不会出现在命令里。</p>
+    </section>
+  </div>
+
+  <footer>
+    本页面为 <a href="https://github.com/hynize/singbox-manager" target="_blank">hynize/singbox-manager</a> 的一键命令生成辅助界面，仅供学习交流，请遵守所在地法律法规。
+  </footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var $id = function (x) { return document.getElementById(x); };
+  var val = function (x) { var e = $id(x); return e ? String(e.value).trim() : ''; };
+
+  var RELEASE_BASE = 'https://github.com/hynize/singbox-manager/releases/download/v0.2.9/install.sh';
+  var RAW_BASE = 'https://raw.githubusercontent.com/hynize/singbox-manager/main/install.sh';
+
+  var SBM_CMDS = [
+    ['sbm', '打开交互式主菜单'],
+    ['sbm help', '查看命令用法'],
+    ['sbm list', '查看节点与分享链接'],
+    ['sbm rep', '覆盖式一键安装（按环境变量重建节点）'],
+    ['sbm ins', '追加式一键安装（保留已有节点）'],
+    ['sbm delall', '删除全部节点并重启服务'],
+    ['sbm un', '卸载 Singbox Manager'],
+    ['systemctl status singbox-manager', '查看服务状态（systemd）'],
+    ['journalctl -u singbox-manager -e --no-pager', '查看服务日志（systemd）'],
+    ['tail -n 100 /usr/local/etc/singbox-manager/logs/sing-box.log', '查看 sing-box 运行日志（最近100行）'],
+    ['cat /usr/local/etc/singbox-manager/config.json', '查看生成的 sing-box 配置'],
+    ['ls -l /usr/local/etc/singbox-manager/certs/', '查看托管证书文件']
+  ];
+
+  /* ---------------- helpers ---------------- */
+  function isNum(v) { return /^-?\d+(\.\d+)?$/.test(v); }
+  // sbm 约定：数字裸写，字符串值用英文单引号包裹
+  function qv(v) {
+    if (v === '') return "''";
+    if (isNum(v)) return v;
+    return "'" + v.replace(/'/g, "'\\''") + "'";
+  }
+  function numEnv(k, id, envs) {
+    var v = val(id);
+    if (v) envs.push([k, isNum(v) ? v : qv(v)]);
+  }
+  function strEnv(k, id, envs) {
+    var v = val(id);
+    if (v) envs.push([k, qv(v)]);
+  }
+  function wrapCmd(envs, tail) {
+    var form = val('cmd-form') || 'install';
+    if (form === 'sbm') {
+      var s = '';
+      envs.forEach(function (p) {
+        if (p[1] !== '' && p[1] != null) s += p[0] + '=' + p[1] + ' ';
+      });
+      return s + 'sbm' + (tail ? ' ' + tail : '');
+    }
+    var url = val('install-src') === 'raw' ? RAW_BASE : RELEASE_BASE;
+    var dl = val('dl') || 'curl';
+    var fetcher = dl === 'curl' ? ('curl -fsSL ' + url) : ('wget -qO- ' + url);
+    var s2 = '';
+    envs.forEach(function (p) {
+      if (p[1] !== '' && p[1] != null) s2 += p[0] + '=' + p[1] + ' \\\n';
+    });
+    return s2 + 'bash <(' + fetcher + ')' + (tail ? ' ' + tail : '');
+  }
+  function genUuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+      var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
+  // 纯字母数字密码（不含易混淆的 0/O/1/l/I），无转义隐患
+  function genPassword() {
+    var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    var arr = new Uint8Array(16);
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(arr);
+    else for (var i = 0; i < 16; i++) arr[i] = Math.random() * 256 | 0;
+    return Array.prototype.map.call(arr, function (x) { return chars[x % chars.length]; }).join('');
+  }
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch (e) {
+      var ta = document.createElement('textarea');
+      ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) {}
+      ta.remove(); return ok;
+    }
+  }
+  function flashBtn(btn, ok) {
+    if (!btn) return;
+    var old = btn.getAttribute('data-old') || btn.textContent;
+    btn.setAttribute('data-old', old);
+    btn.textContent = ok ? '✅ 已复制' : '❌ 复制失败';
+    clearTimeout(btn._t);
+    btn._t = setTimeout(function () { btn.textContent = old; }, 1200);
+  }
+
+  /* ---------------- 速查列表渲染 ---------------- */
+  function renderCmdList(id, rows) {
+    var box = $id(id);
+    if (!box) return;
+    box.innerHTML = '';
+    rows.forEach(function (r) {
+      var div = document.createElement('div');
+      div.className = 'crow';
+      var code = document.createElement('code');
+      code.textContent = r[0];
+      var desc = document.createElement('span');
+      desc.className = 'cdesc';
+      desc.textContent = r[1];
+      var btn = document.createElement('button');
+      btn.className = 'mini';
+      btn.type = 'button';
+      btn.textContent = '复制';
+      btn.addEventListener('click', async function () {
+        flashBtn(btn, await copyText(r[0]));
+      });
+      div.appendChild(code); div.appendChild(desc); div.appendChild(btn);
+      box.appendChild(div);
+    });
+  }
+
+  /* ---------------- 命令生成 ---------------- */
+  function buildSbm() {
+    var tail = val('sbm-tail') || 'rep';
+    var envs = [];
+    // 直连协议端口
+    ['vlrt', 'wspt', 'tupt', 'anypt', 'hypt', 'socks5pt'].forEach(function (k) { numEnv(k, k, envs); });
+    // Argo
+    if (val('argo') === 'vlpt') {
+      numEnv('argo_pt', 'argo_pt', envs);
+      envs.push(['argo', "'vlpt'"]);
+    }
+    // 全局
+    strEnv('uuid', 'uuid', envs);
+    strEnv('name', 'name', envs);
+    strEnv('passwd', 'passwd', envs);
+    // SNI 与 WS
+    strEnv('vl_sni', 'vl_sni', envs);
+    strEnv('ws_host', 'ws_host', envs);
+    strEnv('ws_path', 'ws_path', envs);
+    strEnv('cdn_host', 'cdn_host', envs);
+    strEnv('tu_sni', 'tu_sni', envs);
+    strEnv('any_sni', 'any_sni', envs);
+    strEnv('hy_sni', 'hy_sni', envs);
+    // 证书
+    if (val('cert') === 'custom') {
+      envs.push(['cert', "'custom'"]);
+      strEnv('cert_path', 'cert_path', envs);
+      strEnv('key_path', 'key_path', envs);
+    }
+    // HY2 带宽
+    numEnv('up_mbps', 'up_mbps', envs);
+    numEnv('down_mbps', 'down_mbps', envs);
+    // Argo 固定隧道
+    strEnv('agn', 'agn', envs);
+    strEnv('agk', 'agk', envs);
+    // SOCKS5
+    strEnv('socks5_username', 'socks5-username', envs);
+    strEnv('socks5_password', 'socks5-password', envs);
+    return wrapCmd(envs, tail);
+  }
+
+  function regen() {
+    $id('cmd').value = buildSbm();
+  }
+
+  /* ---------------- 状态联动 ---------------- */
+  function syncArgo() {
+    var on = val('argo') === 'vlpt';
+    $id('argo_pt').disabled = !on;
+  }
+  function syncCert() {
+    var custom = val('cert') === 'custom';
+    $id('cert_path').disabled = !custom;
+    $id('key_path').disabled = !custom;
+  }
+  function syncForm() {
+    var form = val('cmd-form') || 'install';
+    $id('dl').disabled = form === 'sbm';
+    $id('install-src').disabled = form === 'sbm';
+  }
+
+  /* ---------------- 事件绑定 ---------------- */
+  document.addEventListener('input', function () { regen(); });
+  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); regen(); });
+
+  $id('gen-uuid').addEventListener('click', function () { $id('uuid').value = genUuid(); regen(); });
+  $id('gen-passwd').addEventListener('click', function () { $id('passwd').value = genPassword(); regen(); });
+  $id('gen-s5pass').addEventListener('click', function () { $id('socks5-password').value = genPassword(); regen(); });
+
+  $id('copy').addEventListener('click', async function () {
+    flashBtn($id('copy'), await copyText($id('cmd').value));
+  });
+  $id('reset').addEventListener('click', function () { location.reload(); });
+
+  /* ---------------- 主题 ---------------- */
+  var themeBtn = $id('theme-btn');
+  function applyTheme(t) {
+    document.body.classList.toggle('light-mode', t === 'light');
+    themeBtn.textContent = t === 'light' ? '🌙' : '☀️';
+    try { localStorage.setItem('sbm-theme', t); } catch (e) {}
+  }
+  themeBtn.addEventListener('click', function () {
+    applyTheme(document.body.classList.contains('light-mode') ? 'dark' : 'light');
+  });
+  var savedTheme = 'dark';
+  try { savedTheme = localStorage.getItem('sbm-theme') || 'dark'; } catch (e) {}
+  applyTheme(savedTheme);
+
+  /* ---------------- 初始化 ---------------- */
+  // 给所有端口输入框追加 🎲 随机端口按钮
+  function randPort() { return 10000 + Math.floor(Math.random() * 55536); }
+  document.querySelectorAll('input.port-input').forEach(function (inp) {
+    var wrap = document.createElement('div');
+    wrap.className = 'ctl';
+    inp.parentNode.insertBefore(wrap, inp);
+    wrap.appendChild(inp);
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mini';
+    btn.textContent = '🎲';
+    btn.title = '填入随机端口（10000-65535）';
+    btn.addEventListener('click', function () {
+      if (inp.disabled) inp.disabled = false;
+      if (inp.id === 'argo_pt' && !val('argo')) {
+        var sel = $id('argo');
+        sel.value = 'vlpt';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      inp.value = randPort();
+      regen();
+    });
+    wrap.appendChild(btn);
+  });
+
+  renderCmdList('sbm-cmds', SBM_CMDS);
+  syncArgo(); syncCert(); syncForm();
+  regen();
+})();
+</script>
+</body>
+</html>

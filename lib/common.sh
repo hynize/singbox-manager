@@ -66,7 +66,9 @@ require_root() {
 }
 
 setup_common_traps() {
-  trap 'release_lock' EXIT INT TERM
+  trap 'release_lock' EXIT
+  trap 'release_lock; exit 130' INT
+  trap 'release_lock; exit 143' TERM
   trap 'handle_common_error "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}" "${BASH_LINENO[0]:-0}" "$?"' ERR
 }
 
@@ -115,7 +117,11 @@ verify_sha256() {
 ensure_dir_mode() {
   local dir="$1"
   local mode="$2"
-  install -d -m "$mode" "$dir"
+  if install -d -m "$mode" "$dir" 2>/dev/null; then
+    return 0
+  fi
+  mkdir -p "$dir"
+  chmod "$mode" "$dir"
 }
 
 ensure_file_mode() {
@@ -245,7 +251,8 @@ record_value() {
   local file="$1"
   local tag="$2"
   local field="$3"
-  jq -r --arg tag "$tag" --arg field "$field" '.[$tag][$field] // empty' "$file"
+  # tr -d '\r'：防御个别平台 jq 输出 CRLF 导致取值带 \r 无法匹配
+  jq -r --arg tag "$tag" --arg field "$field" '.[$tag][$field] // empty' "$file" | tr -d '\r'
 }
 
 node_value() {
@@ -257,7 +264,7 @@ secret_value() {
 }
 
 iter_node_tags() {
-  jq -r 'keys[]' "${NODES_FILE}" 2>/dev/null
+  jq -r 'keys[]' "${NODES_FILE}" 2>/dev/null | tr -d '\r'
 }
 
 delete_node_records() {

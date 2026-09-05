@@ -15,24 +15,27 @@ jobs:
       - name: Install Tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck
+          sudo apt-get install -y shellcheck jq
           curl -fsSL https://github.com/mvdan/sh/releases/download/v3.10.0/shfmt_v3.10.0_linux_amd64 -o /tmp/shfmt
           sudo install -m 0755 /tmp/shfmt /usr/local/bin/shfmt
 
       - name: ShellCheck
-        run: shellcheck -e SC1091 install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
+        run: shellcheck -e SC1091 install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh tests/smoke.sh
 
       - name: Bash Syntax
-        run: bash -n install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
+        run: bash -n install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh tests/smoke.sh
 
       - name: Formatting
         run: shfmt -i 2 -d install.sh sb.sh lib/common.sh scripts/watchdog.sh scripts/build-release-bundle.sh
 
       - name: No CRLF
         run: |
-          if grep -rlP '\r' install.sh sb.sh lib metadata scripts VERSION README.md .github 2>/dev/null; then
+          if grep -rlP '\r' install.sh sb.sh lib metadata scripts tests README.md .github 2>/dev/null; then
             echo "Found CRLF line endings in shell scripts"; exit 1
           fi
+
+      - name: Smoke Test
+        run: bash tests/smoke.sh
 
       - name: Build Bundle
         run: bash scripts/build-release-bundle.sh

@@ -116,6 +116,10 @@ start_token_tunnel() {
   local tag="$1"
   local token pid_file log_file edge_ip
   token="$(secret_value "$tag" "argo_token")"
+  if [ -z "${token}" ]; then
+    print_warn "节点 ${tag} 的 Argo Token 为空，已跳过启动。"
+    return 0
+  fi
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 

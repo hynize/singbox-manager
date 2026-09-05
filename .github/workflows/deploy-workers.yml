@@ -1,0 +1,26 @@
+name: Deploy to Cloudflare Workers
+
+# 手动触发（仓库 Actions 页面 → Run workflow）。
+# 使用前需在仓库 Settings → Secrets and variables → Actions 配置两个 Secret：
+#   CLOUDFLARE_API_TOKEN   —— 具有 Workers 编辑权限的 API Token
+#   CLOUDFLARE_ACCOUNT_ID  —— Cloudflare 账户 ID
+# 只用 GitHub Pages 的话，删除本文件即可。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: interface
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: interface

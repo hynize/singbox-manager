@@ -18,7 +18,9 @@ install -m 0755 "${ROOT_DIR}/scripts/watchdog.sh" "${PACKAGE_DIR}/scripts/watchd
 install -m 0644 "${ROOT_DIR}/README.md" "${PACKAGE_DIR}/README.md"
 install -m 0644 "${ROOT_DIR}/VERSION" "${PACKAGE_DIR}/VERSION"
 
-tar -czf "${DIST_DIR}/${PACKAGE_NAME}" -C "${DIST_DIR}" "singbox-manager-${VERSION}"
+# 归一化 tar 元数据并用 gzip -n 去除时间戳，保证同一内容构建出字节级一致的 bundle
+tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+  -cf - -C "${DIST_DIR}" "singbox-manager-${VERSION}" | gzip -n >"${DIST_DIR}/${PACKAGE_NAME}"
 
 (
   cd "${DIST_DIR}"

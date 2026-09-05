@@ -5,9 +5,10 @@ umask 077
 
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
-PROJECT_VERSION="v0.2.8"
-PACKAGE_NAME="singbox-manager-v0.2.8.tar.gz"
-PACKAGE_SHA256="30f4636b209a1364f256eb4d57db83393d0bffb8cd1abd561fb43580a917ecae"
+PROJECT_VERSION="v0.2.9"
+PACKAGE_NAME="singbox-manager-v0.2.9.tar.gz"
+# 发布流程：scripts/build-release-bundle.sh 构建可复现 bundle，其 SHA256 与此处一致
+PACKAGE_SHA256="f6e7af2b6c442bff48f14894296757ebf3565bca6558fe2748b0da34f909a7cf"
 PACKAGE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${PROJECT_VERSION}/${PACKAGE_NAME}"
 
 INSTALL_BIN="/usr/local/bin/sbm"
@@ -77,14 +78,35 @@ install_bundle() {
   rm -rf "$tmpdir"
 }
 
+resolve_action() {
+  # 显式传入动作（如 rep / ins）；未传参时若检测到节点环境变量则默认覆盖式安装
+  local action="${1:-}"
+  local var
+  if [ -n "${action}" ]; then
+    printf '%s' "${action}"
+    return 0
+  fi
+  for var in vlrt wspt tupt anypt hypt socks5pt argo; do
+    if [ -n "${!var:-}" ]; then
+      printf 'rep'
+      return 0
+    fi
+  done
+  printf ''
+}
+
 main() {
-  local bundle
+  local bundle action
   bundle="$(mktemp)"
   download "${PACKAGE_URL}" "${bundle}"
   verify_bundle "${bundle}"
   install_bundle "${bundle}"
   rm -f "${bundle}"
   echo "Singbox Manager ${PROJECT_VERSION} 安装完成：${INSTALL_BIN}"
+  action="$(resolve_action "$@")"
+  if [ -n "${action}" ]; then
+    exec "${INSTALL_BIN}" "${action}"
+  fi
   exec "${INSTALL_BIN}"
 }
 
