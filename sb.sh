@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.15"
+SCRIPT_VERSION="0.2.16"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -2260,7 +2260,11 @@ main_menu() {
     echo "9. 全局设置"
     echo "0. 退出"
     echo
-    read -r -p "请选择: " choice
+    choice=""
+    read -r -p "请选择: " choice || true
+    if [ -z "${choice}" ] && [ ! -t 0 ]; then
+      return 0
+    fi
     case "${choice}" in
     1)
       install_core
