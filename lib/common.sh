@@ -9,6 +9,7 @@ LIB_DIR="${LIB_DIR:-/usr/local/lib/singbox-manager}"
 CONFIG_FILE="${CONFIG_FILE:-${BASE_DIR}/config.json}"
 NODES_FILE="${NODES_FILE:-${BASE_DIR}/nodes.json}"
 SECRETS_FILE="${SECRETS_FILE:-${BASE_DIR}/secrets.json}"
+SETTING_FILE="${SETTING_FILE:-${BASE_DIR}/settings.json}"
 CERT_DIR="${CERT_DIR:-${BASE_DIR}/certs}"
 LOG_DIR="${LOG_DIR:-${BASE_DIR}/logs}"
 RUNTIME_DIR="${RUNTIME_DIR:-${BASE_DIR}/runtime}"
@@ -143,6 +144,7 @@ init_storage() {
   ensure_file_mode "${NODES_FILE}" 600 "{}"$'\n'
   ensure_file_mode "${SECRETS_FILE}" 600 "{}"$'\n'
   ensure_file_mode "${CONFIG_FILE}" 600 "{}"$'\n'
+  ensure_file_mode "${SETTING_FILE}" 600 "{}"$'\n'
 }
 
 sanitize_permissions() {
@@ -155,6 +157,7 @@ sanitize_permissions() {
   [ -f "${NODES_FILE}" ] && chmod 600 "${NODES_FILE}"
   [ -f "${SECRETS_FILE}" ] && chmod 600 "${SECRETS_FILE}"
   [ -f "${CONFIG_FILE}" ] && chmod 600 "${CONFIG_FILE}"
+  [ -f "${SETTING_FILE}" ] && chmod 600 "${SETTING_FILE}"
 
   find "${CERT_DIR}" -type f -name '*.key' -exec chmod 600 {} \; 2>/dev/null || true
   find "${CERT_DIR}" -type f -name '*.crt' -exec chmod 600 {} \; 2>/dev/null || true
@@ -313,33 +316,73 @@ wrap_host() {
   fi
 }
 
+get_setting() {
+  local key="$1"
+  local default="${2:-}"
+  local value
+  value="$(jq -r --arg key "$key" '.[$key] // empty' "${SETTING_FILE}" 2>/dev/null | tr -d '\r')"
+  printf '%s' "${value:-${default}}"
+}
+
+set_setting() {
+  local key="$1"
+  local value="$2"
+  init_storage
+  # shellcheck disable=SC2016
+  json_update "${SETTING_FILE}" --arg key "$key" --arg value "$value" '.[$key] = $value'
+}
+
 get_public_ip() {
-  local ip fallback
+  local ip ipver flag url
   if [ -n "${PUBLIC_IP_CACHE}" ]; then
     printf '%s' "${PUBLIC_IP_CACHE}"
     return 0
   fi
 
-  for url in \
-    "https://api64.ipify.org" \
-    "https://ipv6.icanhazip.com" \
-    "https://ipv4.icanhazip.com" \
-    "https://ifconfig.me/ip"; do
-    ip="$(curl -fsS --max-time 5 "$url" 2>/dev/null | tr -d '\r\n' || true)"
-    if is_ip_address "$ip" && ! is_private_ip "$ip"; then
-      PUBLIC_IP_CACHE="$ip"
-      printf '%s' "${PUBLIC_IP_CACHE}"
-      return 0
+  # 分享链接默认使用 IPv4；全局设置 ip_version 可选 auto(=v4 优先) / 4 / 6
+  ipver="$(get_setting "ip_version" "4")"
+  case "${ipver,,}" in
+  6 | v6) ipver="6" ;;
+  *) ipver="4" ;;
+  esac
+
+  local families=(4 6)
+  if [ "${ipver}" = "6" ]; then
+    families=(6 4)
+  fi
+
+  for ipver in "${families[@]}"; do
+    if [ "${ipver}" = "4" ]; then
+      flag="--ipv4"
+      for url in "https://api.ipify.org" "https://ipv4.icanhazip.com"; do
+        ip="$(curl -fsS --max-time 5 ${flag} "$url" 2>/dev/null | tr -d '\r\n' || true)"
+        if is_ip_address "$ip" && ! is_private_ip "$ip"; then
+          PUBLIC_IP_CACHE="$ip"
+          printf '%s' "${PUBLIC_IP_CACHE}"
+          return 0
+        fi
+      done
+    else
+      flag="--ipv6"
+      for url in "https://api64.ipify.org" "https://ipv6.icanhazip.com"; do
+        ip="$(curl -fsS --max-time 5 ${flag} "$url" 2>/dev/null | tr -d '\r\n' || true)"
+        if is_ip_address "$ip" && ! is_private_ip "$ip"; then
+          PUBLIC_IP_CACHE="$ip"
+          printf '%s' "${PUBLIC_IP_CACHE}"
+          return 0
+        fi
+      done
     fi
   done
 
+  local fallback=""
   for ip in $(hostname -I 2>/dev/null || true); do
     if is_ip_address "$ip" && ! is_private_ip "$ip"; then
       PUBLIC_IP_CACHE="$ip"
       printf '%s' "${PUBLIC_IP_CACHE}"
       return 0
     fi
-    [ -n "${fallback:-}" ] || fallback="$ip"
+    [ -n "${fallback}" ] || fallback="$ip"
   done
 
   fallback="${fallback:-127.0.0.1}"

@@ -123,6 +123,14 @@ assert_eval_true "ensure_tls_material 生成证书" 'pair="$(ensure_tls_material
 assert_eval_true "auto_cert_bundle 默认自签" 'auto_cert_bundle t_auto www.bing.com | grep -q "^self-signed|"'
 assert_eval_false "auto_cert_bundle custom 缺路径回退自签" 'unset cert_path key_path; cert=custom; auto_cert_bundle t_c www.bing.com | grep -q "^custom|"'
 
+# --- 全局设置 ---
+assert_eq "get_setting 默认 ip_version" "4" "$(get_setting ip_version 4)"
+set_setting "ip_version" "6"
+assert_eq "set_setting 回读" "6" "$(get_setting ip_version 4)"
+set_setting "ip_version" "auto"
+assert_eq "set_setting auto" "auto" "$(get_setting ip_version 4)"
+assert_eq "settings.json 权限 600" "600" "$(stat -c %a "${SETTING_FILE}")"
+
 # --- wipe_records ---
 wipe_records
 assert_eq "wipe_records 清空 nodes" "0" "$(jq length "${NODES_FILE}")"

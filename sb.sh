@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.9"
+SCRIPT_VERSION="0.2.10"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -2043,6 +2043,44 @@ print_header() {
   echo
 }
 
+ipver_display() {
+  case "$(get_setting "ip_version" "4")" in
+  6 | v6) printf 'v6' ;;
+  auto) printf 'auto（v4 优先）' ;;
+  *) printf 'v4（默认）' ;;
+  esac
+}
+
+settings_menu() {
+  local choice value
+  while true; do
+    print_header
+    echo "全局设置"
+    echo
+    echo "1. 分享链接默认 IP 版本   当前：$(ipver_display)"
+    echo "0. 返回"
+    echo
+    read -r -p "请选择: " choice
+    case "${choice}" in
+    1)
+      read -r -p "IP 版本 (4/v6/auto) [4]: " value
+      value="$(normalize_input "${value:-4}")"
+      case "${value,,}" in
+      4 | v4) set_setting "ip_version" "4" ;;
+      6 | v6) set_setting "ip_version" "6" ;;
+      auto) set_setting "ip_version" "auto" ;;
+      *) print_warn "无效的值：${value}（可选 4 / v6 / auto）" ;;
+      esac
+      ;;
+    0) return 0 ;;
+    *)
+      print_warn "无效的选择。"
+      sleep 1
+      ;;
+    esac
+  done
+}
+
 pause_menu() {
   read -r -p "按回车继续..." _
 }
@@ -2060,6 +2098,7 @@ main_menu() {
     echo "6. 查看状态"
     echo "7. 更新项目文件"
     echo "8. 卸载"
+    echo "9. 全局设置"
     echo "0. 退出"
     echo
     read -r -p "请选择: " choice
@@ -2097,6 +2136,9 @@ main_menu() {
         exit 0
       fi
       pause_menu
+      ;;
+    9)
+      settings_menu
       ;;
     0) exit 0 ;;
     *)

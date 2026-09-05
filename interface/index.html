@@ -122,8 +122,7 @@
       font-family: ui-monospace, Consolas, monospace; vertical-align: 1px;
     }
 
-    .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
-    @media (max-width: 700px) { .pgrid { grid-template-columns: 1fr; } }
+    .pgrid { display: grid; grid-template-columns: 1fr; gap: 10px 14px; }
     .pitem label { display: block; font-size: 14px; margin-bottom: 4px; }
     .sep { border-top: 1px dashed var(--line); margin: 14px 0 4px; }
 
@@ -174,7 +173,7 @@
     <h1>Singbox-Manager 🧰 一键SSH命令生成器</h1>
     <p>
       项目地址：<a href="https://github.com/hynize/singbox-manager" target="_blank">github.com/hynize/singbox-manager</a>
-      　|　其他命令查询：<a href="https://pkg.tbbbk.com/" target="_blank">pkg.tbbbk.com（Linux 应用安装器 · 180+ 应用一键安装命令）</a>
+      　|　其他命令查询：<a href="https://pkg.tbbbk.com/" target="_blank">pkg.tbbbk.com</a>（Linux 应用安装器 · 180+ 应用一键安装命令）
     </p>
   </header>
 
@@ -189,10 +188,10 @@
         <div class="pgrid">
           <div class="pitem"><label>VLESS-Reality <span class="pill">vlrt</span></label><input type="text" class="port-input" id="vlrt" placeholder="如 2083，或点 🎲 随机" inputmode="numeric"></div>
           <div class="pitem"><label>VLESS-WS-TLS <span class="pill">wspt</span></label><input type="text" class="port-input" id="wspt" placeholder="如 8443，或点 🎲 随机" inputmode="numeric"></div>
-          <div class="pitem"><label>TUIC v5 <span class="pill">tupt</span></label><input type="text" class="port-input" id="tupt" placeholder="如 10443，或点 🎲 随机" inputmode="numeric"></div>
           <div class="pitem"><label>AnyTLS <span class="pill">anypt</span></label><input type="text" class="port-input" id="anypt" placeholder="如 5443，或点 🎲 随机" inputmode="numeric"></div>
-          <div class="pitem"><label>Hysteria2 <span class="pill">hypt</span></label><input type="text" class="port-input" id="hypt" placeholder="如 11443，或点 🎲 随机" inputmode="numeric"></div>
           <div class="pitem"><label>SOCKS5 <span class="pill">socks5pt</span></label><input type="text" class="port-input" id="socks5pt" placeholder="如 31017，或点 🎲 随机" inputmode="numeric"></div>
+          <div class="pitem"><label>TUIC v5 <span class="pill">tupt</span></label><input type="text" class="port-input" id="tupt" placeholder="如 10443，或点 🎲 随机" inputmode="numeric"></div>
+          <div class="pitem"><label>Hysteria2 <span class="pill">hypt</span></label><input type="text" class="port-input" id="hypt" placeholder="如 11443，或点 🎲 随机" inputmode="numeric"></div>
         </div>
 
         <div class="sep"></div>
@@ -386,7 +385,7 @@
   var $id = function (x) { return document.getElementById(x); };
   var val = function (x) { var e = $id(x); return e ? String(e.value).trim() : ''; };
 
-  var RELEASE_BASE = 'https://github.com/hynize/singbox-manager/releases/download/v0.2.9/install.sh';
+  var RELEASE_BASE = 'https://github.com/hynize/singbox-manager/releases/download/v0.2.10/install.sh';
   var RAW_BASE = 'https://raw.githubusercontent.com/hynize/singbox-manager/main/install.sh';
 
   var SBM_CMDS = [
