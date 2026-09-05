@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.11"
+SCRIPT_VERSION="0.2.12"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -53,6 +53,7 @@ else
   fatal "未找到 upstream.env。"
 fi
 
+require_bash4
 setup_common_traps
 
 has_systemd=false
@@ -163,42 +164,50 @@ pkg_install() {
   fi
 }
 
-ensure_dependencies() {
-  local packages=()
-  if command_exists apt-get; then
-    packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils)
-  elif command_exists dnf || command_exists yum; then
-    packages=(ca-certificates curl tar jq openssl procps-ng iproute util-linux findutils grep sed gawk coreutils)
-  elif command_exists apk; then
-    packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils gcompat)
-  elif command_exists pacman; then
-    packages=(ca-certificates curl tar jq openssl procps-ng iproute2 util-linux findutils grep sed gawk coreutils)
-  elif command_exists zypper; then
-    packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils)
+required_commands() {
+  printf '%s\n' curl tar jq openssl awk sed grep find head mktemp install nohup tr hostname kill rm mv chmod cat cp
+  if [ "${has_systemd}" = true ]; then
+    printf '%s\n' systemctl
+  elif [ "${has_openrc}" = true ]; then
+    printf '%s\n' rc-service rc-update
   fi
+}
 
-  pkg_install "${packages[@]}"
+deps_present() {
+  local cmd
+  while IFS= read -r cmd; do
+    command_exists "${cmd}" || return 1
+  done < <(required_commands)
+  command_exists ss || command_exists netstat || return 1
+  return 0
+}
+
+ensure_dependencies() {
+  # 依赖齐全时跳过包管理器（避免每次菜单操作都全量刷新软件源索引）
+  if ! deps_present; then
+    local packages=()
+    if command_exists apt-get; then
+      packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils)
+    elif command_exists dnf || command_exists yum; then
+      packages=(ca-certificates curl tar jq openssl procps-ng iproute util-linux findutils grep sed gawk coreutils)
+    elif command_exists apk; then
+      packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils gcompat)
+    elif command_exists pacman; then
+      packages=(ca-certificates curl tar jq openssl procps-ng iproute2 util-linux findutils grep sed gawk coreutils)
+    elif command_exists zypper; then
+      packages=(ca-certificates curl tar jq openssl procps iproute2 util-linux findutils grep sed gawk coreutils)
+    fi
+
+    pkg_install "${packages[@]}"
+  fi
   verify_runtime_prereqs
 }
 
 verify_runtime_prereqs() {
-  local missing=()
-  local required=(
-    curl tar jq openssl awk sed grep find head mktemp install nohup tr hostname
-  )
-
-  local proc_tools=("kill" "rm" "mv" "chmod" "cat" "cp")
-  required+=("${proc_tools[@]}")
-
-  if [ "${has_systemd}" = true ]; then
-    required+=("systemctl")
-  elif [ "${has_openrc}" = true ]; then
-    required+=("rc-service" "rc-update")
-  fi
-
-  for cmd in "${required[@]}"; do
-    command_exists "$cmd" || missing+=("$cmd")
-  done
+  local missing=() cmd
+  while IFS= read -r cmd; do
+    command_exists "${cmd}" || missing+=("${cmd}")
+  done < <(required_commands)
 
   if ! command_exists ss && ! command_exists netstat; then
     missing+=("ss/netstat")
@@ -251,15 +260,26 @@ install_release_bundle() {
   bundle_file="${tmpdir}/${bundle_name}"
   checksums_file="${tmpdir}/checksums.txt"
 
-  download_file "${checksums_url}" "${checksums_file}"
-  download_file "${bundle_url}" "${bundle_file}"
+  download_file "${checksums_url}" "${checksums_file}" || {
+    rm -rf "${tmpdir}"
+    fatal "下载 checksums.txt 失败。"
+  }
+  download_file "${bundle_url}" "${bundle_file}" || {
+    rm -rf "${tmpdir}"
+    fatal "下载 ${bundle_name} 失败。"
+  }
 
-  expected="$(awk -v file="${bundle_name}" '{ sub(/\r$/, "", $2); if ($2 == file) print $1 }' "${checksums_file}")"
+  # 兼容 GNU sha256sum 二进制模式输出（文件名带 * 前缀）与 CRLF
+  expected="$(awk -v file="${bundle_name}" '{ sub(/\r$/, "", $2); sub(/^\*/, "", $2); if ($2 == file) print $1 }' "${checksums_file}")"
   [ -n "${expected}" ] || fatal "未找到 ${bundle_name} 的校验值。"
   verify_sha256 "${bundle_file}" "${expected}"
 
   tar -xzf "${bundle_file}" -C "${tmpdir}"
   root_dir="$(find "${tmpdir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  [ -n "${root_dir}" ] || {
+    rm -rf "${tmpdir}"
+    fatal "发布包结构异常：未找到根目录。"
+  }
   install -d -m 700 "${LIB_DIR}" "${BASE_DIR}"
   install -m 0755 "${root_dir}/sb.sh" "${INSTALL_BIN}"
   install -m 0644 "${root_dir}/lib/common.sh" "${LIB_DIR}/common.sh"
@@ -281,7 +301,10 @@ install_singbox_core() {
   tmpdir="$(mktemp -d)"
   archive="${tmpdir}/${asset}"
   print_info "正在安装 sing-box ${SINGBOX_VERSION} (${arch})"
-  download_file "${url}" "${archive}"
+  if ! download_file "${url}" "${archive}"; then
+    rm -rf "${tmpdir}"
+    fatal "下载 sing-box 失败：${url}"
+  fi
   verify_sha256 "${archive}" "${expected}"
   tar -xzf "${archive}" -C "${tmpdir}"
   binary="$(find "${tmpdir}" -type f -name sing-box | head -n 1)"
@@ -301,24 +324,27 @@ install_cloudflared_bin() {
   version="${CLOUDFLARED_VERSION:-}"
   expected="${CLOUDFLARED_SHA256[$arch]:-}"
   if [ "${CLOUDFLARED_LATEST:-false}" = "true" ]; then
-    if version="$(cloudflared_latest_version)"; then
-      expected="$(cloudflared_latest_digest "${asset}" || true)"
-      print_info "cloudflared 官方最新版本：${version}"
-    else
-      print_warn "无法从 GitHub API 获取 cloudflared 最新版本，回退到固定版本 ${version:-未知}。"
+    # fail-closed：拿不到官方版本或 digest 一律拒绝安装，绝不跳过校验
+    if ! version="$(cloudflared_latest_version)"; then
+      fatal "无法获取 cloudflared 最新版本，拒绝继续安装。"
     fi
+    if ! expected="$(cloudflared_latest_digest "${asset}")"; then
+      fatal "无法获取 cloudflared ${version} 的官方 digest，拒绝安装未校验的二进制。"
+    fi
+    print_info "cloudflared 官方最新版本：${version}"
+  else
+    [ -n "${version}" ] || fatal "未配置 cloudflared 版本。"
+    [ -n "${expected}" ] || fatal "未配置 ${arch} 对应的 cloudflared 校验值，拒绝安装未校验的二进制。"
   fi
-  [ -n "${version}" ] || fatal "未配置 cloudflared 版本。"
 
   url="https://github.com/cloudflare/cloudflared/releases/download/${version}/${asset}"
   tmpfile="$(mktemp)"
   print_info "正在安装 cloudflared ${version} (${arch})"
-  download_file "${url}" "${tmpfile}"
-  if [ -n "${expected}" ]; then
-    verify_sha256 "${tmpfile}" "${expected}"
-  else
-    print_warn "未获取到 cloudflared 校验和，已跳过完整性校验。"
+  if ! download_file "${url}" "${tmpfile}"; then
+    rm -f "${tmpfile}"
+    fatal "下载 cloudflared 失败：${url}"
   fi
+  verify_sha256 "${tmpfile}" "${expected}"
   install -m 0755 "${tmpfile}" "${CLOUDFLARED_BIN}"
   ensure_binary_runs "${CLOUDFLARED_BIN}" "cloudflared" version
   rm -f "${tmpfile}"
@@ -544,7 +570,9 @@ system_has_port() {
   local port="$1"
   if command_exists ss; then
     ss -ltnuH 2>/dev/null | awk -v port="$port" '
-      { addr = $5; sub(/.*:/, "", addr); if (addr == port) found = 1 }
+      $1 ~ /^(tcp|tcp6|udp|udp6)$/ {
+        addr = $5; sub(/.*:/, "", addr); if (addr == port) found = 1
+      }
       END { exit found ? 0 : 1 }
     '
   elif command_exists netstat; then
@@ -989,14 +1017,15 @@ start_argo_node() {
 
   if [ "${mode}" = "token" ]; then
     token="$(secret_value "$tag" "argo_token")"
-    nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run --token "${token}" \
-      >"${log_file}" 2>&1 &
+    # token 经环境变量传入，避免明文出现在进程命令行（ps 可见）
+    TUNNEL_TOKEN="${token}" nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run \
+      >>"${log_file}" 2>&1 &
     write_pid_file "${pid_file}" "$!"
     return 0
   fi
 
   nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${port}" \
-    >"${log_file}" 2>&1 &
+    >>"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 
   if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
@@ -1016,7 +1045,8 @@ restart_all_argo_nodes() {
   while IFS= read -r tag; do
     [ -n "${tag}" ] || continue
     if [ "$(node_value "$tag" "protocol")" = "vless-argo" ]; then
-      start_argo_node "$tag"
+      # 单个隧道启动失败不影响其余隧道与调用方
+      start_argo_node "$tag" || print_warn "Argo 隧道 ${tag} 启动失败。"
     fi
   done < <(iter_node_tags)
 }
@@ -1393,26 +1423,56 @@ auto_has_node_env() {
   return 1
 }
 
+# 预校验：把环境变量解析为 "协议 端口" 行。
+# 端口设置了但非法时返回 1——必须在清空任何数据之前发生（rep 安全前提）。
+auto_collect_specs() {
+  local entry var proto raw port
+  for entry in vlrt:vless-reality wspt:vless-ws-tls tupt:tuic-v5 anypt:anytls hypt:hy2 socks5pt:socks5; do
+    var="${entry%%:*}"
+    proto="${entry##*:}"
+    raw="$(env_var "$var")"
+    [ -n "${raw}" ] || continue
+    if ! port="$(env_port "$var")"; then
+      print_err "环境变量 ${var}=${raw} 不是有效端口。"
+      return 1
+    fi
+    printf '%s %s\n' "${proto}" "${port}"
+  done
+  if auto_argo_requested; then
+    raw="$(env_var "argo_pt")"
+    if [ -z "${raw}" ]; then
+      port=8001
+    elif ! port="$(env_port "argo_pt")"; then
+      print_err "环境变量 argo_pt=${raw} 不是有效端口。"
+      return 1
+    fi
+    printf '%s %s\n' "vless-argo" "${port}"
+  fi
+  return 0
+}
+
 auto_cert_bundle() {
   local tag="$1"
   local domain="$2"
-  local mode cert_path key_path pair
+  # 局部变量统一 __ 前缀：cert_path/key_path 是环境变量键名，
+  # 若声明同名局部变量，env_var 的间接引用会命中空的局部变量（bash 动态作用域）
+  local __mode __cert_path __key_path __pair
 
-  mode="$(env_var "cert")"
-  mode="${mode:-self}"
-  if [ "${mode}" = "custom" ]; then
-    cert_path="$(env_var "cert_path")"
-    key_path="$(env_var "key_path")"
-    if [ -n "$cert_path" ] && [ -n "$key_path" ] && pair="$(import_custom_certificate_bundle "$tag" "$cert_path" "$key_path")"; then
-      printf 'custom|%s|%s' "${pair%|*}" "${pair#*|}"
+  __mode="$(env_var "cert")"
+  __mode="${__mode:-self}"
+  if [ "${__mode}" = "custom" ]; then
+    __cert_path="$(env_var "cert_path")"
+    __key_path="$(env_var "key_path")"
+    if [ -n "$__cert_path" ] && [ -n "$__key_path" ] && __pair="$(import_custom_certificate_bundle "$tag" "$__cert_path" "$__key_path")"; then
+      printf 'custom|%s|%s' "${__pair%|*}" "${__pair#*|}"
       return 0
     fi
     print_warn "自定义证书不可用（缺少 cert_path/key_path 或读取失败），节点 ${tag} 回退自签证书。"
-  elif [ "${mode}" != "self" ] && [ "${mode}" != "self-signed" ]; then
-    print_warn "未知证书模式 cert=${mode}，节点 ${tag} 使用自签证书。"
+  elif [ "${__mode}" != "self" ] && [ "${__mode}" != "self-signed" ]; then
+    print_warn "未知证书模式 cert=${__mode}，节点 ${tag} 使用自签证书。"
   fi
-  pair="$(ensure_tls_material "$tag" "$domain")"
-  printf 'self-signed|%s|%s' "${pair%|*}" "${pair#*|}"
+  __pair="$(ensure_tls_material "$tag" "$domain")"
+  printf 'self-signed|%s|%s' "${__pair%|*}" "${__pair#*|}"
 }
 
 auto_save_node() {
@@ -1725,19 +1785,23 @@ wipe_records() {
 }
 
 delete_all_nodes() {
-  local tag
+  local tag cert_file key_file
   init_storage
   acquire_lock
+  backup_state >/dev/null
   while IFS= read -r tag; do
     [ -n "${tag}" ] || continue
     stop_argo_node "${tag}"
+    cert_file="$(node_value "${tag}" "certificate_path")"
+    key_file="$(node_value "${tag}" "key_path")"
+    remove_node_certificates "${tag}" "${cert_file}" "${key_file}"
   done < <(iter_node_tags)
   wipe_records
   render_config
   start_service
   sanitize_permissions
   release_lock
-  print_ok "已删除全部节点并重启服务。"
+  print_ok "已删除全部节点（含证书）并重启服务。"
 }
 
 auto_try_port() {
@@ -1750,9 +1814,24 @@ auto_try_port() {
   return 0
 }
 
+# 清理不再被任何节点引用的证书/私钥文件（tag 命名不含点，取首个 . 前缀即 tag）
+cleanup_orphan_certs() {
+  local f path tag
+  while IFS= read -r f; do
+    path="${f##*/}"
+    tag="${path%%.*}"
+    [ -n "${tag}" ] || continue
+    if ! jq -e --arg tag "${tag}" 'has($tag)' "${NODES_FILE}" >/dev/null 2>&1; then
+      rm -f "${f}"
+    fi
+  done < <(find "${CERT_DIR}" -type f \( -name '*.crt' -o -name '*.key' \) 2>/dev/null)
+}
+
 auto_install() {
   local action="$1"
-  local tag port added=0 failed=0
+  local tag port spec line backup_dir
+  local added=0 failed=0
+  local -a specs=()
   local ENV_NAME ENV_UUID ENV_PASSWD
   local ENV_VL_SNI ENV_TU_SNI ENV_ANY_SNI ENV_HY_SNI ENV_WS_HOST ENV_WS_PATH ENV_CDN_HOST
   local ENV_SOCKS5_USER ENV_SOCKS5_PASS
@@ -1766,8 +1845,24 @@ auto_install() {
     exit 1
   fi
 
+  # 预校验：端口非法在这里直接失败，任何已有数据都不会被改动
+  if ! spec="$(auto_collect_specs)"; then
+    print_err "输入校验失败，未更改任何数据。"
+    exit 1
+  fi
+  while IFS= read -r line; do
+    [ -n "${line}" ] && specs+=("${line}")
+  done <<<"${spec}"
+  if [ "${#specs[@]}" -eq 0 ]; then
+    print_err "未检测到有效的节点端口环境变量，放弃安装。"
+    exit 1
+  fi
+
   ensure_singbox_ready
   acquire_lock
+
+  # 破坏性操作前先快照；rep 失败时据此恢复
+  backup_dir="$(backup_state)"
 
   if [ "${action}" = "rep" ]; then
     while IFS= read -r tag; do
@@ -1776,7 +1871,9 @@ auto_install() {
     done < <(iter_node_tags)
     stop_service || true
     wipe_records
-    print_info "已清空原有节点，按环境变量重建。"
+    print_info "已清空原有节点（备份：${backup_dir}），按环境变量重建。"
+  else
+    print_info "已备份现有状态：${backup_dir}"
   fi
 
   ENV_NAME="$(env_var "name")"
@@ -1792,48 +1889,68 @@ auto_install() {
   ENV_SOCKS5_USER="$(env_var "socks5_username")"
   ENV_SOCKS5_PASS="$(env_var "socks5_password")"
 
-  if port="$(env_port "vlrt")" && auto_try_port "$port" "VLESS-Reality"; then
-    auto_add_vless_reality "$port" && added=$((added + 1)) || failed=$((failed + 1))
-  fi
-  if port="$(env_port "wspt")" && auto_try_port "$port" "VLESS-WS-TLS"; then
-    auto_add_vless_ws_tls "$port" && added=$((added + 1)) || failed=$((failed + 1))
-  fi
-  if port="$(env_port "anypt")" && auto_try_port "$port" "AnyTLS"; then
-    auto_add_anytls "$port" && added=$((added + 1)) || failed=$((failed + 1))
-  fi
-  if auto_argo_requested; then
-    if port="$(env_port "argo_pt")"; then
-      :
-    else
-      port=8001
-    fi
-    if auto_try_port "$port" "VLESS-Argo"; then
-      auto_add_vless_argo "$port" && added=$((added + 1)) || failed=$((failed + 1))
-    fi
-  fi
-  if port="$(env_port "tupt")" && auto_try_port "$port" "TUIC-v5"; then
-    auto_add_tuic_v5 "$port" && added=$((added + 1)) || failed=$((failed + 1))
-  fi
-  if port="$(env_port "hypt")" && auto_try_port "$port" "Hysteria2"; then
-    auto_add_hy2 "$port" && added=$((added + 1)) || failed=$((failed + 1))
-  fi
-  if port="$(env_port "socks5pt")" && auto_try_port "$port" "SOCKS5"; then
-    auto_add_socks5 "$port" && added=$((added + 1)) || failed=$((failed + 1))
-  fi
+  for line in "${specs[@]}"; do
+    port="${line##* }"
+    case "${line%% *}" in
+    vless-reality)
+      if auto_try_port "$port" "VLESS-Reality"; then
+        auto_add_vless_reality "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      fi
+      ;;
+    vless-ws-tls)
+      if auto_try_port "$port" "VLESS-WS-TLS"; then
+        auto_add_vless_ws_tls "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      fi
+      ;;
+    anytls)
+      if auto_try_port "$port" "AnyTLS"; then
+        auto_add_anytls "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      fi
+      ;;
+    vless-argo)
+      if auto_try_port "$port" "VLESS-Argo"; then
+        auto_add_vless_argo "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      fi
+      ;;
+    tuic-v5)
+      if auto_try_port "$port" "TUIC-v5"; then
+        auto_add_tuic_v5 "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      fi
+      ;;
+    hy2)
+      if auto_try_port "$port" "Hysteria2"; then
+        auto_add_hy2 "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      fi
+      ;;
+    socks5)
+      if auto_try_port "$port" "SOCKS5"; then
+        auto_add_socks5 "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      fi
+      ;;
+    esac
+  done
 
   if [ "${added}" -eq 0 ]; then
     if [ "${action}" = "rep" ]; then
+      restore_latest_backup || true
+      reconcile_state || true
       render_config || true
       start_service || true
+      print_err "没有成功写入任何节点（added=0, failed=${failed}），已恢复安装前的节点状态。"
+    else
+      print_err "没有成功写入任何节点（added=0, failed=${failed}），现有节点未受影响。"
     fi
     release_lock
-    print_err "没有成功写入任何节点（added=0, failed=${failed}）。"
     exit 1
   fi
 
+  if [ "${action}" = "rep" ]; then
+    cleanup_orphan_certs
+  fi
   render_config
   start_service
-  restart_all_argo_nodes
+  # 隧道启动失败（如临时域名等待超时）不应判定整次安装失败
+  restart_all_argo_nodes || print_warn "部分 Argo 隧道启动失败，稍后可用 sbm list 重查域名。"
   sanitize_permissions
   release_lock
 
@@ -1900,7 +2017,7 @@ delete_node() {
   init_storage
   tag="$(select_node_tag)" || {
     print_warn "没有可选节点，或输入的编号无效。"
-    return 1
+    return 0
   }
 
   protocol="$(node_value "$tag" "protocol")"
@@ -1915,9 +2032,9 @@ delete_node() {
     stop_argo_node "$tag"
   fi
   delete_node_records "$tag"
-  render_config
-  start_service
   remove_node_certificates "$tag" "$cert_file" "$key_file"
+  render_config || true
+  start_service || true
   sanitize_permissions
   release_lock
   print_ok "已删除节点：${tag}"
@@ -1928,10 +2045,11 @@ show_status() {
   init_storage
   detect_systemd
   count="$(jq 'length' "${NODES_FILE}" 2>/dev/null || printf '0')"
-  installed_version="${SINGBOX_VERSION}"
+  installed_version="${SINGBOX_VERSION#v}"
   if [ -x "${SINGBOX_BIN}" ]; then
     installed_version="$("${SINGBOX_BIN}" version 2>/dev/null | head -n 1 | awk '{print $NF}')"
-    installed_version="${installed_version:-${SINGBOX_VERSION}}"
+    installed_version="${installed_version#v}"
+    installed_version="${installed_version:-${SINGBOX_VERSION#v}}"
   fi
   echo
   echo "项目名称：${PROJECT_NAME}"
@@ -1970,6 +2088,12 @@ update_script() {
   acquire_lock
   install_release_bundle "${latest_tag}"
   sanitize_permissions
+  # 让运行中的服务与新版本文件保持一致（配置未变时仅为快速重启）
+  if [ -x "${SINGBOX_BIN}" ] && [ -f "${CONFIG_FILE}" ]; then
+    print_info "重启服务以应用新版本..."
+    start_service || true
+    restart_all_argo_nodes || true
+  fi
   release_lock
   print_ok "项目文件已更新到 ${latest_tag}"
 }
@@ -2155,10 +2279,11 @@ print_cli_usage() {
 
 命令:
   (无参数)   打开交互式主菜单
-  rep        覆盖式一键安装：清空已有节点，按环境变量重建并启动
-  ins        追加式一键安装：保留已有节点，按环境变量追加节点并启动
+  rep        覆盖式一键安装：备份后清空已有节点，按环境变量重建并启动
+  ins        追加式一键安装：备份后保留已有节点，按环境变量追加节点并启动
   list       查看节点与分享链接
-  delall     删除全部节点并重启服务
+  delall     删除全部节点（含证书）并重启服务
+  restore    从最近一次状态备份恢复节点
   un         卸载本项目
 
 环境变量一键安装示例（配合网页命令生成器使用）:
@@ -2188,6 +2313,18 @@ main() {
   delall)
     require_root
     delete_all_nodes
+    ;;
+  restore)
+    require_root
+    init_storage
+    acquire_lock
+    if restore_latest_backup; then
+      reconcile_state || true
+      render_config
+      start_service
+      print_ok "已恢复并重启服务。"
+    fi
+    release_lock
     ;;
   un)
     require_root

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -eEuo pipefail
+
+# 一致性门禁：版本号单一来源 + install.sh 内嵌校验值与可复现 bundle 一致
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT_DIR}"
+
+fail() {
+  echo "一致性校验失败：$1" >&2
+  exit 1
+}
+
+version_file="$(sed 's/^v//' VERSION | tr -d '\r\n')"
+version_sb="$(grep -m1 '^SCRIPT_VERSION=' sb.sh | cut -d'"' -f2)"
+version_install="$(grep -m1 '^PROJECT_VERSION=' install.sh | sed 's/.*v//; s/"$//' | tr -d '\r\n')"
+version_iface="$(grep -o 'releases/download/v[0-9.]*' interface/index.html | head -n 1 | sed 's|releases/download/v||')"
+
+[ "${version_file}" = "${version_sb}" ] || fail "VERSION(${version_file}) 与 sb.sh SCRIPT_VERSION(${version_sb}) 不一致"
+[ "${version_file}" = "${version_install}" ] || fail "VERSION(${version_file}) 与 install.sh PROJECT_VERSION(${version_install}) 不一致"
+[ "${version_file}" = "${version_iface}" ] || fail "VERSION(${version_file}) 与 interface RELEASE_BASE(${version_iface}) 不一致"
+
+bash scripts/build-release-bundle.sh >/dev/null
+bundle_name="singbox-manager-v${version_file}.tar.gz"
+[ -f "dist/${bundle_name}" ] || fail "构建产物缺失：dist/${bundle_name}"
+
+actual="$(sha256sum "dist/${bundle_name}" | awk '{print $1}')"
+pinned="$(grep -m1 '^PACKAGE_SHA256=' install.sh | grep -o '[a-f0-9]\{64\}')"
+[ -n "${pinned}" ] || fail "install.sh 未找到 PACKAGE_SHA256"
+[ "${actual}" = "${pinned}" ] || fail "install.sh 内嵌校验值(${pinned}) 与实际 bundle(${actual}) 不一致"
+
+# checksums.txt 必须是 "hash␣␣文件名" 归一化格式（无 * 二进制标记）
+expected_line="${actual}  ${bundle_name}"
+line="$(tr -d '\r' <dist/checksums.txt)"
+[ "${line}" = "${expected_line}" ] || fail "checksums.txt 格式异常：${line}"
+
+# worker.js 必须与 index.html 保持同步再生成
+# 注意：Windows 商店的 python3 假别名能被 command -v 找到但执行即失败，按可执行性探测
+py=""
+if command -v python3 >/dev/null 2>&1 && python3 -c "pass" >/dev/null 2>&1; then
+  py="python3"
+elif command -v python >/dev/null 2>&1 && python -c "pass" >/dev/null 2>&1; then
+  py="python"
+fi
+[ -n "${py}" ] || fail "需要 python 以校验 worker.js 同步性"
+
+# worker.js 必须与 index.html 保持同步：在临时目录中重建一份再逐字节对比
+tmp_iface="$(mktemp -d)"
+cp interface/index.html interface/build.py "${tmp_iface}/"
+(cd "${tmp_iface}" && "$py" build.py >/dev/null)
+if ! diff -q interface/worker.js "${tmp_iface}/worker.js" >/dev/null; then
+  rm -rf "${tmp_iface}"
+  fail "interface/worker.js 与 index.html 不同步，请运行 python interface/build.py"
+fi
+rm -rf "${tmp_iface}"
+
+rm -rf dist
+echo "一致性校验通过：v${version_file} / ${actual:0:12}..."

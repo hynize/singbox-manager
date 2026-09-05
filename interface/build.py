@@ -19,18 +19,25 @@ HEADER = '''/**
 
 const HTML = %s;
 
+const SECURITY_HEADERS = {
+  'content-type': 'text/html;charset=UTF-8',
+  'cache-control': 'no-store',
+  // 页面仅使用内联 script/style，无外部资源；收紧其余加载与嵌入行为
+  'content-security-policy':
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+    "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+};
+
 export default {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname !== '/') {
-      return new Response('Not Found', { status: 404 });
+      return new Response('Not Found', { status: 404, headers: SECURITY_HEADERS });
     }
-    return new Response(HTML, {
-      headers: {
-        'content-type': 'text/html;charset=UTF-8',
-        'cache-control': 'no-store',
-      },
-    });
+    return new Response(HTML, { headers: SECURITY_HEADERS });
   },
 };
 '''

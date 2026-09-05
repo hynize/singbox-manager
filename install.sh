@@ -5,10 +5,10 @@ umask 077
 
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
-PROJECT_VERSION="v0.2.11"
-PACKAGE_NAME="singbox-manager-v0.2.11.tar.gz"
+PROJECT_VERSION="v0.2.12"
+PACKAGE_NAME="singbox-manager-v0.2.12.tar.gz"
 # 发布流程：scripts/build-release-bundle.sh 构建可复现 bundle，其 SHA256 与此处一致
-PACKAGE_SHA256="d465539a6487ed1fcb6e2c0ba91bd5bd7931d56e909038ae4485a7acfc990615"
+PACKAGE_SHA256="d60b652f892575acca35feae7ded66d34c97d0c90544aa64da22f9769f1e1bd4"
 PACKAGE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${PROJECT_VERSION}/${PACKAGE_NAME}"
 
 INSTALL_BIN="/usr/local/bin/sbm"
@@ -79,7 +79,8 @@ install_bundle() {
 }
 
 resolve_action() {
-  # 显式传入动作（如 rep / ins）；未传参时若检测到节点环境变量则默认覆盖式安装
+  # 显式传入动作（rep / ins）优先生效；未传参但检测到节点环境变量时，
+  # 默认走非破坏性的 ins（追加），避免残留变量静默触发覆盖式重装
   local action="${1:-}"
   local var
   if [ -n "${action}" ]; then
@@ -88,7 +89,7 @@ resolve_action() {
   fi
   for var in vlrt wspt tupt anypt hypt socks5pt argo; do
     if [ -n "${!var:-}" ]; then
-      printf 'rep'
+      printf 'ins'
       return 0
     fi
   done
@@ -98,7 +99,11 @@ resolve_action() {
 main() {
   local bundle action
   bundle="$(mktemp)"
-  download "${PACKAGE_URL}" "${bundle}"
+  if ! download "${PACKAGE_URL}" "${bundle}"; then
+    rm -f "${bundle}"
+    echo "下载发布包失败：${PACKAGE_URL}" >&2
+    exit 1
+  fi
   verify_bundle "${bundle}"
   install_bundle "${bundle}"
   rm -f "${bundle}"

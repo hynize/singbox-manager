@@ -22,6 +22,7 @@ else
   . "${SCRIPT_DIR}/../lib/common.sh"
 fi
 
+require_bash4
 setup_common_traps
 
 has_systemd=false
@@ -49,6 +50,12 @@ start_non_systemd_singbox() {
 
 ensure_log_rotation() {
   rotate_log_file "${LOG_DIR}/sing-box.log" || true
+  # cloudflared 节点日志同样按大小轮转，防止长期运行无上限增长
+  local lf
+  while IFS= read -r lf; do
+    [ -n "${lf}" ] || continue
+    rotate_log_file "${lf}" || true
+  done < <(find "${LOG_DIR}" -type f -name '*.cloudflared.log' 2>/dev/null)
 }
 
 ensure_singbox() {
@@ -88,11 +95,12 @@ start_temp_tunnel() {
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
-  : >"${log_file}"
+  : >>"${log_file}"
   chmod 600 "${log_file}"
   edge_ip="$(argo_edge_ip_version)"
+  # 追加模式写入（O_APPEND）：轮转截断后写入偏移自动归零，避免稀疏文件
   nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${local_port}" \
-    >"${log_file}" 2>&1 &
+    >>"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 
   if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
@@ -123,11 +131,12 @@ start_token_tunnel() {
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
-  : >"${log_file}"
+  : >>"${log_file}"
   chmod 600 "${log_file}"
   edge_ip="$(argo_edge_ip_version)"
-  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run --token "${token}" \
-    >"${log_file}" 2>&1 &
+  # token 经环境变量传入，避免明文出现在进程命令行（ps 可见）
+  TUNNEL_TOKEN="${token}" nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run \
+    >>"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 }
 
@@ -150,20 +159,25 @@ ensure_argo_nodes() {
     rm -f "${pid_file}"
     mode="$(node_value "$tag" "argo_mode")"
     if [ "${mode}" = "token" ]; then
-      start_token_tunnel "${tag}"
+      start_token_tunnel "${tag}" || true
     else
       release_lock
-      start_temp_tunnel "${tag}"
-      acquire_lock
+      start_temp_tunnel "${tag}" || true
+      try_acquire_lock || true
     fi
   done < <(iter_node_tags)
 }
 
 require_root
+require_bash4
 init_storage
 sanitize_permissions
-acquire_lock
+# 拿不到锁说明另一实例正在工作：静默跳过本轮，不报错
+if ! try_acquire_lock; then
+  exit 0
+fi
 ensure_log_rotation
+reconcile_state || true
 ensure_singbox
 ensure_argo_nodes
 sanitize_permissions

@@ -38,9 +38,10 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 
 ```text
 sbm           交互菜单（安装/添加/查看/删除/重启/状态/更新/卸载/全局设置）
-sbm rep|ins   环境变量一键安装
+sbm rep|ins   环境变量一键安装（自动快照备份；rep 端口非法时直接拒绝，不动现有数据）
 sbm list      查看节点与分享链接
-sbm delall    删除全部节点
+sbm delall    删除全部节点（含证书，自动快照）
+sbm restore   从最近一次快照恢复节点
 sbm un        卸载
 ```
 
@@ -58,6 +59,7 @@ tests/smoke.sh               冒烟测试
 
 ## 说明
 
+- 稳健性：`rep`/`ins`/`delall` 前自动快照到 `backups/`（保留 10 份），`sbm restore` 一键回滚；watchdog 每轮自动对账清理孤儿记录；cloudflared 拿不到官方 digest 时拒绝安装（fail-closed）；Argo Token 经环境变量传递，不出现在进程命令行
 - 保活：systemd 环境用 service + timer；OpenRC/无 systemd 用 cron + pidfile，cloudflared 异常退出约 1 分钟内自动拉起
 - 安全：`set -eEuo pipefail`、`umask 077`、secrets/证书/pid 全部 600；sing-box 固定版本 + SHA256，cloudflared 跟随官方最新版并校验 digest
 - CI：shellcheck / bash -n / shfmt / 冒烟测试 / 可复现 bundle 构建

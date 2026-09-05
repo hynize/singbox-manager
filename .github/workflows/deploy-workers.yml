@@ -9,6 +9,10 @@ name: Deploy to Cloudflare Workers
 on:
   workflow_dispatch:
 
+concurrency:
+  group: deploy-workers
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

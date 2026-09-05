@@ -21,6 +21,14 @@ LOG_ROTATE_BACKUPS="${LOG_ROTATE_BACKUPS:-3}"
 SINGBOX_BIN="${SINGBOX_BIN:-/usr/local/bin/sing-box}"
 CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-/usr/local/bin/cloudflared}"
 SERVICE_NAME="${SERVICE_NAME:-singbox-manager}"
+DEFAULT_CDN_DOMAIN="${DEFAULT_CDN_DOMAIN:-saas.sin.fan}"
+
+require_bash4() {
+  if [ -z "${BASH_VERSION:-}" ] || [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then
+    echo "需要 bash 4.0 及以上版本（当前：${BASH_VERSION:-未知}）。" >&2
+    exit 1
+  fi
+}
 
 COLOR_GREEN="\033[1;32m"
 COLOR_YELLOW="\033[1;33m"
@@ -188,11 +196,44 @@ acquire_lock() {
       if [ $((now - start_time)) -ge "${LOCK_TIMEOUT}" ]; then
         fatal "在 ${LOCK_TIMEOUT} 秒内无法获取锁。"
       fi
+      # 陈旧锁自愈：持有 mkdir 锁的进程死亡不会自动释放，
+      # 锁目录年龄超过 4 倍超时即判定为残留并强制清除
+      local lock_age
+      lock_age="$(stat -c %Y "${LOCK_DIR_FALLBACK}" 2>/dev/null || printf 0)"
+      now="$(date +%s)"
+      if [ "$((now - lock_age))" -gt "$((LOCK_TIMEOUT * 4))" ]; then
+        print_warn "检测到陈旧锁目录，强制清除：${LOCK_DIR_FALLBACK}"
+        rm -rf "${LOCK_DIR_FALLBACK}"
+        continue
+      fi
       sleep 1
     done
   fi
 
   LOCK_HELD=true
+}
+
+# 非阻塞尝试加锁：watchdog 等后台任务拿不到锁时静默跳过本轮而非报错退出
+try_acquire_lock() {
+  init_storage
+
+  if [ "${LOCK_HELD}" = true ]; then
+    return 0
+  fi
+
+  if command_exists flock; then
+    exec {LOCK_FD}>"${LOCK_FILE}" || return 1
+    if ! flock -n "${LOCK_FD}" 2>/dev/null; then
+      eval "exec ${LOCK_FD}>&-" 2>/dev/null || true
+      LOCK_FD=""
+      return 1
+    fi
+  else
+    mkdir "${LOCK_DIR_FALLBACK}" 2>/dev/null || return 1
+  fi
+
+  LOCK_HELD=true
+  return 0
 }
 
 release_lock() {
@@ -276,13 +317,74 @@ delete_node_records() {
   json_delete_record "${SECRETS_FILE}" "$tag"
 }
 
+# 崩溃对账：nodes 与 secrets 必须成对存在，孤儿记录一律清除
+reconcile_state() {
+  local tag
+  while IFS= read -r tag; do
+    [ -n "${tag}" ] || continue
+    if ! jq -e --arg tag "${tag}" 'has($tag)' "${SECRETS_FILE}" >/dev/null 2>&1; then
+      print_warn "对账：节点 ${tag} 缺少密钥记录，已移除。"
+      json_delete_record "${NODES_FILE}" "${tag}"
+    fi
+  done < <(iter_node_tags)
+  while IFS= read -r tag; do
+    [ -n "${tag}" ] || continue
+    if ! jq -e --arg tag "${tag}" 'has($tag)' "${NODES_FILE}" >/dev/null 2>&1; then
+      print_warn "对账：孤儿密钥 ${tag}，已移除。"
+      json_delete_record "${SECRETS_FILE}" "${tag}"
+    fi
+  done < <(jq -r 'keys[]' "${SECRETS_FILE}" 2>/dev/null | tr -d '\r')
+}
+
+# 破坏性操作前的状态快照；仅保留最近 10 份
+backup_state() {
+  local backup_dir
+  backup_dir="${BASE_DIR}/backups/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "${backup_dir}" && chmod 700 "${BASE_DIR}/backups" "${backup_dir}"
+  local f
+  for f in nodes.json secrets.json config.json settings.json; do
+    [ -f "${BASE_DIR}/${f}" ] && cp "${BASE_DIR}/${f}" "${backup_dir}/${f}"
+  done
+  find "${BASE_DIR}/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r | tail -n +11 | xargs -r rm -rf
+  printf '%s' "${backup_dir}"
+}
+
+restore_latest_backup() {
+  local latest f
+  latest="$(find "${BASE_DIR}/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)"
+  if [ -z "${latest}" ]; then
+    print_err "没有可用的状态备份。"
+    return 1
+  fi
+  for f in nodes.json secrets.json config.json settings.json; do
+    if [ -f "${latest}/${f}" ]; then
+      cp "${latest}/${f}" "${BASE_DIR}/${f}" && chmod 600 "${BASE_DIR}/${f}"
+    fi
+  done
+  print_ok "已从备份恢复：${latest}"
+}
+
 url_encode() {
   jq -nr --arg s "$1" '$s|@uri'
 }
 
 is_ip_address() {
-  local ip="$1"
-  [[ "${ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || [[ "${ip}" == *:* && "${ip}" =~ ^[0-9a-fA-F:]+$ ]]
+  local ip="$1" octet
+  # IPv4：四组 0-255（兼容前导零）
+  if [[ "${ip}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+    for octet in "${BASH_REMATCH[@]:1:4}"; do
+      [ "$((10#${octet}))" -le 255 ] || return 1
+    done
+    return 0
+  fi
+  # IPv6：仅含 hex 与冒号，且 :: 至多出现一次
+  if [[ "${ip}" == *:* ]] && [[ "${ip}" =~ ^[0-9a-fA-F:]+$ ]]; then
+    case "${ip}" in
+    *::*::*) return 1 ;;
+    *) return 0 ;;
+    esac
+  fi
+  return 1
 }
 
 is_private_ip() {
@@ -442,15 +544,25 @@ ensure_tls_material() {
     san="DNS:${domain}"
   fi
 
+  local extfile=""
   if ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
     -keyout "$key_file" \
     -out "$cert_file" \
     -subj "/CN=${domain}" \
     -addext "subjectAltName=${san}" >/dev/null 2>&1; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    # -addext 不受支持时改用 -extfile（OpenSSL 1.0+ 均可用），仍保留 SAN
+    extfile="$(mktemp "${CERT_DIR}/.ext.XXXXXX")"
+    printf 'subjectAltName=%s\n' "${san}" >"${extfile}"
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
       -keyout "$key_file" \
       -out "$cert_file" \
-      -subj "/CN=${domain}" >/dev/null 2>&1
+      -subj "/CN=${domain}" \
+      -extfile "${extfile}" >/dev/null 2>&1; then
+      rm -f "${extfile}"
+      print_err "自签证书生成失败（含 SAN）：${domain}"
+      return 1
+    fi
+    rm -f "${extfile}"
   fi
 
   chmod 600 "$cert_file" "$key_file"
@@ -631,6 +743,9 @@ build_share_link() {
     preferred_domain="$(node_value "$tag" "preferred_domain")"
     host_domain="$(node_value "$tag" "host_domain")"
     cert_mode="$(node_value "$tag" "certificate_mode")"
+    if [ -z "${preferred_domain}" ] || [ "${preferred_domain}" = "${DEFAULT_CDN_DOMAIN}" ]; then
+      print_warn "WS-TLS 节点 ${tag} 使用默认优选域名 ${DEFAULT_CDN_DOMAIN}：仅当该域名已接入本机前置 CDN 时可用，否则请把 cdn_host 设为你自己的域名。"
+    fi
     printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
       "$uuid" "$(wrap_host "$preferred_domain")" "$port" "$host_domain" "$host_domain" "$(url_encode "$ws_path")"
     if [ "$cert_mode" = "self-signed" ]; then
@@ -654,7 +769,10 @@ build_share_link() {
     ws_path="$(node_value "$tag" "ws_path")"
     preferred_domain="$(node_value "$tag" "preferred_domain")"
     endpoint_domain="$(node_value "$tag" "endpoint_domain")"
-    [ -n "$endpoint_domain" ] || endpoint_domain="待分配.example.com"
+    if [ -z "${endpoint_domain}" ] || [ "${endpoint_domain}" = "待分配.example.com" ]; then
+      print_warn "节点 ${tag} 的 Argo 域名尚未分配（隧道可能未连上），链接暂不可用；稍后重试 sbm list。"
+      return 0
+    fi
     printf 'vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
       "$uuid" "$(wrap_host "$preferred_domain")" "$endpoint_domain" "$endpoint_domain" "$(url_encode "$ws_path")" "$(url_encode "$name")"
     ;;

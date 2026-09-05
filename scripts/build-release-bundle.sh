@@ -24,7 +24,8 @@ tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
 
 (
   cd "${DIST_DIR}"
-  sha256sum "${PACKAGE_NAME}" >checksums.txt
+  # 归一化为 "hash␣␣文件名"（双空格、无二进制标记 *），与 sb.sh 的解析逻辑严格一致
+  awk -v name="${PACKAGE_NAME}" '{ print $1 "  " name }' < <(sha256sum "${PACKAGE_NAME}") >checksums.txt
 )
 
 echo "Built ${DIST_DIR}/${PACKAGE_NAME}"

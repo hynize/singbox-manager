@@ -86,6 +86,8 @@ assert_eval_true "auto_positive_or_default 非法回退" 'up_mbps=abc; [ "$(auto
 assert_eval_true "is_ip_address IPv4" 'is_ip_address 1.2.3.4'
 assert_eval_true "is_ip_address IPv6" 'is_ip_address 2001:db8::1'
 assert_eval_false "is_ip_address 域名" 'is_ip_address example.com'
+assert_eval_false "is_ip_address 越界八位组" 'is_ip_address 1.2.3.999'
+assert_eval_false "is_ip_address 多重 ::" 'is_ip_address ::::'
 assert_eval_true "is_private_ip 10段" 'is_private_ip 10.0.0.1'
 assert_eval_true "is_private_ip 172.16段" 'is_private_ip 172.16.0.1'
 assert_eval_false "is_private_ip 172.32段" 'is_private_ip 172.32.0.1'
@@ -122,6 +124,33 @@ assert_eval_true "socks5 链接含用户名密码" 'build_share_link n3 | grep -
 assert_eval_true "ensure_tls_material 生成证书" 'pair="$(ensure_tls_material tag_tls www.bing.com)"; [ -f "${pair%|*}" ] && [ -f "${pair#*|}" ]'
 assert_eval_true "auto_cert_bundle 默认自签" 'auto_cert_bundle t_auto www.bing.com | grep -q "^self-signed|"'
 assert_eval_false "auto_cert_bundle custom 缺路径回退自签" 'unset cert_path key_path; cert=custom; auto_cert_bundle t_c www.bing.com | grep -q "^custom|"'
+# 回归：cert_path/key_path 环境变量不再被局部变量遮蔽
+cpair="$(ensure_tls_material certsrc www.bing.com)"
+export cert=custom
+export cert_path="${cpair%|*}"
+export key_path="${cpair#*|}"
+assert_eval_true "custom 证书经环境变量正确导入" 'auto_cert_bundle ctest2 www.bing.com | grep -q "^custom|"'
+unset cert cert_path key_path
+
+# --- 状态备份与恢复 ---
+wipe_records
+json_set_record "${NODES_FILE}" "bk" '{"protocol":"socks5","name":"BK","port":1234,"username":"u"}'
+json_set_record "${SECRETS_FILE}" "bk" '{"password":"p"}'
+backup_state >/dev/null
+wipe_records
+assert_eq "清空后节点为 0" "0" "$(jq length "${NODES_FILE}")"
+restore_latest_backup
+assert_eq "备份恢复节点" "1" "$(jq length "${NODES_FILE}")"
+
+# --- 崩溃对账 ---
+wipe_records
+json_set_record "${NODES_FILE}" "pair1" '{"protocol":"hy2"}'
+json_set_record "${SECRETS_FILE}" "pair1" '{"password":"y"}'
+json_set_record "${NODES_FILE}" "orphan1" '{"protocol":"socks5"}'
+json_set_record "${SECRETS_FILE}" "orphan2" '{"password":"x"}'
+reconcile_state
+assert_eq "对账后孤儿节点已清除" "1" "$(jq length "${NODES_FILE}")"
+assert_eq "对账后孤儿密钥已清除" "1" "$(jq length "${SECRETS_FILE}")"
 
 # --- 全局设置 ---
 assert_eq "get_setting 默认 ip_version" "4" "$(get_setting ip_version 4)"
@@ -144,6 +173,10 @@ assert_eval_true "rotate_log_file 产生轮转文件" '[ -f "${big_file}.1" ]'
 
 # --- CLI 用法输出 ---
 assert_eval_true "print_cli_usage 可执行" 'print_cli_usage | grep -q "用法"'
+
+# --- 端到端前置：清空状态 ---
+wipe_records
+assert_eq "端到端前置清空" "0" "$(jq length "${NODES_FILE}")"
 
 # ---------------------------------------------------------------------------
 # 一键安装（auto_install）端到端模拟：stub sing-box 二进制，覆盖 6 种协议
@@ -197,6 +230,18 @@ export vlrt=21831 hypt=21832
 assert_eval_true "rep 重建成功" '( auto_install rep )'
 assert_eq "rep 后只剩新节点" "2" "$(jq length "${NODES_FILE}")"
 assert_eq "rep 后 config 为 2 个 inbound" "2" "$(jq '.inbounds | length' "${CONFIG_FILE}")"
+
+# P0 回归：rep 输入非法端口时先失败且不清空已有节点（预校验先于清空）
+vlrt=99999
+assert_eval_false "rep 非法端口预校验失败" '( auto_install rep )'
+assert_eq "rep 预校验失败不清空节点" "2" "$(jq length "${NODES_FILE}")"
+unset vlrt
+vlrt=21831
+
+# P0 回归：delall 清理证书与私钥文件
+assert_eval_true "证书文件存在（hy2 自签）" '[ "$(find "${CERT_DIR}" -type f | wc -l)" -gt 0 ]'
+assert_eval_true "delete_all_nodes 成功" '( delete_all_nodes )'
+assert_eq "delall 后无残留证书" "0" "$(find "${CERT_DIR}" -type f | wc -l)"
 
 # 清理 stub 进程
 kill_pid_file "${PID_FILE}" || true
