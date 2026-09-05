@@ -97,9 +97,20 @@
     .row { display: grid; grid-template-columns: 205px 1fr; gap: 10px; align-items: center; margin: 10px 0; }
     @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
     .row > label { font-size: 14.5px; text-align: left; }
-    .ctl { display: flex; gap: 8px; }
+    .ctl { position: relative; display: flex; gap: 8px; }
     .ctl > input, .ctl > select { flex: 1; min-width: 0; }
     .ctl > button { flex: 0 0 auto; }
+    .ctl > input { padding-right: 60px; }
+    .ctl > input.has-pick { padding-right: 194px; }
+    .ctl > button.mini {
+      position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      padding: 4px 10px; font-size: 12px;
+    }
+    .ctl > select.pick {
+      position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      width: 180px; padding: 7px 8px; font-size: 13px; flex: none;
+      background: var(--button-bg-dark); border: 1px solid var(--line); border-radius: 8px;
+    }
     input[type="text"], select, textarea {
       width: 100%;
       background: var(--input-bg);
@@ -123,10 +134,9 @@
     }
 
     .pgrid { display: grid; grid-template-columns: 1fr; gap: 10px 14px; }
-    .pitem { display: grid; grid-template-columns: minmax(128px, 158px) 1fr; gap: 10px; align-items: center; }
+    .pitem { display: grid; grid-template-columns: 205px 1fr; gap: 10px; align-items: center; }
     .pitem label { font-size: 14px; margin: 0; }
-    @media (max-width: 480px) { .pitem { grid-template-columns: 1fr; } }
-    .ctl > select.pick { flex: 0 0 auto; width: auto; max-width: 200px; }
+    @media (max-width: 700px) { .pitem { grid-template-columns: 1fr; } }
     .sep { border-top: 1px dashed var(--line); margin: 14px 0 4px; }
 
     button.primary, button.mini, button.ghost {
@@ -277,6 +287,14 @@
           <label>隧道 Token <span class="pill">agk</span></label>
           <input type="text" id="agk" placeholder="ey 开头字符串或 {…} JSON">
         </div>
+        <div class="sep"></div>
+        <div class="row">
+          <label>CF 优选域名 <span class="pill">cdn_host</span></label>
+          <div class="ctl">
+            <input type="text" id="cdn_host" class="has-pick" placeholder="留空默认 saas.sin.fan">
+            <select class="pick cdn-pick" data-target="cdn_host"><option value="">选择…</option></select>
+          </div>
+        </div>
         <p class="note">Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。</p>
       </section>
 
@@ -285,14 +303,14 @@
         <div class="row">
           <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
           <div class="ctl">
-            <input type="text" id="vl_sni" placeholder="留空默认 www.apple.com">
+            <input type="text" id="vl_sni" class="has-pick" placeholder="留空默认 www.apple.com">
             <select class="pick sni-pick" data-target="vl_sni"><option value="">选择…</option></select>
           </div>
         </div>
         <div class="row">
           <label>WS Host/SNI 域名 <span class="pill">ws_host</span></label>
           <div class="ctl">
-            <input type="text" id="ws_host" placeholder="留空默认 www.apple.com">
+            <input type="text" id="ws_host" class="has-pick" placeholder="留空默认 www.apple.com">
             <select class="pick sni-pick" data-target="ws_host"><option value="">选择…</option></select>
           </div>
         </div>
@@ -304,30 +322,22 @@
         <div class="row">
           <label>TUIC SNI <span class="pill">tu_sni</span></label>
           <div class="ctl">
-            <input type="text" id="tu_sni" placeholder="留空默认 www.apple.com">
+            <input type="text" id="tu_sni" class="has-pick" placeholder="留空默认 www.apple.com">
             <select class="pick sni-pick" data-target="tu_sni"><option value="">选择…</option></select>
           </div>
         </div>
         <div class="row">
           <label>AnyTLS SNI <span class="pill">any_sni</span></label>
           <div class="ctl">
-            <input type="text" id="any_sni" placeholder="留空默认 www.apple.com">
+            <input type="text" id="any_sni" class="has-pick" placeholder="留空默认 www.apple.com">
             <select class="pick sni-pick" data-target="any_sni"><option value="">选择…</option></select>
           </div>
         </div>
         <div class="row">
           <label>Hysteria2 SNI <span class="pill">hy_sni</span></label>
           <div class="ctl">
-            <input type="text" id="hy_sni" placeholder="留空默认 www.apple.com">
+            <input type="text" id="hy_sni" class="has-pick" placeholder="留空默认 www.apple.com">
             <select class="pick sni-pick" data-target="hy_sni"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <div class="sep"></div>
-        <div class="row">
-          <label>CF 优选域名 <span class="pill">cdn_host</span></label>
-          <div class="ctl">
-            <input type="text" id="cdn_host" placeholder="留空默认 saas.sin.fan">
-            <select class="pick cdn-pick" data-target="cdn_host"><option value="">选择…</option></select>
           </div>
         </div>
         <p class="note"><b>SNI 安全提示：</b>不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空（内置默认值）。</p>
