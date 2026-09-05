@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.10"
+SCRIPT_VERSION="0.2.11"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -27,7 +27,7 @@ OPENRC_SERVICE_FILE="/etc/init.d/${SERVICE_NAME}"
 
 DEFAULT_CDN_DOMAIN="saas.sin.fan"
 DEFAULT_REALITY_SERVER="www.apple.com"
-DEFAULT_TLS_SERVER="www.bing.com"
+DEFAULT_TLS_SERVER="www.apple.com"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOT=""
@@ -1471,7 +1471,7 @@ auto_add_vless_ws_tls() {
   tag="$(generate_tag "vless-ws-tls")"
   if [ -n "${ENV_NAME}" ]; then name="${ENV_NAME}-WS-TLS"; else name="VLESS-WS-TLS"; fi
   uuid="${ENV_UUID:-$(generate_uuid)}"
-  preferred_domain="${ENV_CDN_HOST:-$(get_public_ip)}"
+  preferred_domain="${ENV_CDN_HOST:-${DEFAULT_CDN_DOMAIN}}"
   host_domain="${ENV_WS_HOST:-${DEFAULT_TLS_SERVER}}"
   ws_path="${ENV_WS_PATH:-$(random_ws_path)}"
   cert_bundle="$(auto_cert_bundle "$tag" "$host_domain")"

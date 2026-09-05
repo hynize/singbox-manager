@@ -123,7 +123,10 @@
     }
 
     .pgrid { display: grid; grid-template-columns: 1fr; gap: 10px 14px; }
-    .pitem label { display: block; font-size: 14px; margin-bottom: 4px; }
+    .pitem { display: grid; grid-template-columns: minmax(128px, 158px) 1fr; gap: 10px; align-items: center; }
+    .pitem label { font-size: 14px; margin: 0; }
+    @media (max-width: 480px) { .pitem { grid-template-columns: 1fr; } }
+    .ctl > select.pick { flex: 0 0 auto; width: auto; max-width: 200px; }
     .sep { border-top: 1px dashed var(--line); margin: 14px 0 4px; }
 
     button.primary, button.mini, button.ghost {
@@ -193,61 +196,11 @@
           <div class="pitem"><label>TUIC v5 <span class="pill">tupt</span></label><input type="text" class="port-input" id="tupt" placeholder="如 10443，或点 🎲 随机" inputmode="numeric"></div>
           <div class="pitem"><label>Hysteria2 <span class="pill">hypt</span></label><input type="text" class="port-input" id="hypt" placeholder="如 11443，或点 🎲 随机" inputmode="numeric"></div>
         </div>
-
-        <div class="sep"></div>
-        <h3>Argo CDN 协议（VLESS + Argo 隧道）</h3>
-        <div class="row">
-          <label>启用 Argo <span class="pill">argo</span></label>
-          <select id="argo">
-            <option value="">不启用 Argo</option>
-            <option value="vlpt">VLESS-WS + Argo（vlpt）</option>
-          </select>
-        </div>
-        <div class="row">
-          <label>Argo 本地端口 <span class="pill">argo_pt</span></label>
-          <input type="text" class="port-input" id="argo_pt" placeholder="默认 8001" inputmode="numeric" disabled>
-        </div>
-        <p class="note">Argo 支持临时隧道（无需填写任何 Token，域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，同时填写 <b>agn + agk</b>）。</p>
+        <p class="note">分享链接默认使用服务器 IPv4 出口；HY2/TUIC/AnyTLS 不填密码时自动生成。</p>
       </section>
 
       <section class="card">
-        <h2>③ SNI 与 WebSocket <span class="tip">留空使用内置默认值</span></h2>
-        <div class="row">
-          <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
-          <input type="text" id="vl_sni" placeholder="默认 www.apple.com">
-        </div>
-        <div class="row">
-          <label>WS Host/SNI 域名 <span class="pill">ws_host</span></label>
-          <input type="text" id="ws_host" placeholder="默认 www.bing.com">
-        </div>
-        <div class="row">
-          <label>WebSocket 路径 <span class="pill">ws_path</span></label>
-          <input type="text" id="ws_path" placeholder="留空自动生成随机路径（Argo/WS 共用）">
-        </div>
-        <div class="row">
-          <label>CF 优选域名 <span class="pill">cdn_host</span></label>
-          <input type="text" id="cdn_host" placeholder="WS-TLS 优选域名留空用本机IP；Argo 默认 saas.sin.fan">
-        </div>
-        <div class="sep"></div>
-        <div class="row">
-          <label>TUIC SNI <span class="pill">tu_sni</span></label>
-          <input type="text" id="tu_sni" placeholder="默认 www.bing.com">
-        </div>
-        <div class="row">
-          <label>AnyTLS SNI <span class="pill">any_sni</span></label>
-          <input type="text" id="any_sni" placeholder="默认 www.bing.com">
-        </div>
-        <div class="row">
-          <label>Hysteria2 SNI <span class="pill">hy_sni</span></label>
-          <input type="text" id="hy_sni" placeholder="默认 www.bing.com">
-        </div>
-        <p class="note"><b>SNI 安全提示：</b>不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空（内置默认值）。</p>
-      </section>
-      </div>
-
-      <div class="col">
-      <section class="card">
-        <h2>② 全局配置</h2>
+        <h2>③ 全局配置</h2>
         <div class="row">
           <label>UUID <span class="pill">uuid</span></label>
           <div class="ctl">
@@ -282,28 +235,6 @@
           <label>私钥路径 <span class="pill">key_path</span></label>
           <input type="text" id="key_path" placeholder="/etc/ssl/private.pem" disabled>
         </div>
-        <div class="sep"></div>
-        <div class="row">
-          <label>Hysteria2 上行 Mbps <span class="pill">up_mbps</span></label>
-          <input type="text" id="up_mbps" placeholder="默认 200" inputmode="numeric">
-        </div>
-        <div class="row">
-          <label>Hysteria2 下行 Mbps <span class="pill">down_mbps</span></label>
-          <input type="text" id="down_mbps" placeholder="默认 200" inputmode="numeric">
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>④ Argo 固定隧道 <span class="tip">临时隧道留空即可</span></h2>
-        <div class="row">
-          <label>固定隧道域名 <span class="pill">agn</span></label>
-          <input type="text" id="agn" placeholder="如 argo.example.com，留空为临时隧道">
-        </div>
-        <div class="row">
-          <label>隧道 Token <span class="pill">agk</span></label>
-          <input type="text" id="agk" placeholder="ey 开头字符串或 {…} JSON">
-        </div>
-        <p class="note">固定隧道需<b>同时填写</b> agn（回源域名）和 agk（Token），缺一则回退临时隧道。临时隧道的 trycloudflare 域名会变化，安装完成后用 <b>sbm list</b> 查看。</p>
       </section>
 
       <section class="card">
@@ -320,9 +251,90 @@
           </div>
         </div>
       </section>
+      </div>
+
+      <div class="col">
+      <section class="card">
+        <h2>② Argo CDN 协议（VLESS + Argo 隧道）</h2>
+        <div class="row">
+          <label>启用 Argo <span class="pill">argo</span></label>
+          <select id="argo">
+            <option value="">不启用 Argo</option>
+            <option value="vlpt">VLESS-WS + Argo（vlpt）</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Argo 本地端口 <span class="pill">argo_pt</span></label>
+          <input type="text" class="port-input" id="argo_pt" placeholder="默认 8001" inputmode="numeric" disabled>
+        </div>
+        <div class="sep"></div>
+        <h3>Argo 固定隧道 <span class="tip">临时隧道留空即可</span></h3>
+        <div class="row">
+          <label>固定隧道域名 <span class="pill">agn</span></label>
+          <input type="text" id="agn" placeholder="如 argo.example.com，留空为临时隧道">
+        </div>
+        <div class="row">
+          <label>隧道 Token <span class="pill">agk</span></label>
+          <input type="text" id="agk" placeholder="ey 开头字符串或 {…} JSON">
+        </div>
+        <p class="note">Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。</p>
+      </section>
 
       <section class="card">
-        <h2>⑥ 执行动作 <span class="pill">尾部参数</span></h2>
+        <h2>④ SNI 与 WebSocket <span class="tip">SNI 留空默认 www.apple.com</span></h2>
+        <div class="row">
+          <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="vl_sni" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="vl_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <label>WS Host/SNI 域名 <span class="pill">ws_host</span></label>
+          <div class="ctl">
+            <input type="text" id="ws_host" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="ws_host"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <label>WebSocket 路径 <span class="pill">ws_path</span></label>
+          <input type="text" id="ws_path" placeholder="留空自动生成随机路径（Argo/WS 共用）">
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <label>TUIC SNI <span class="pill">tu_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="tu_sni" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="tu_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <label>AnyTLS SNI <span class="pill">any_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="any_sni" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="any_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <label>Hysteria2 SNI <span class="pill">hy_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="hy_sni" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="hy_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <label>CF 优选域名 <span class="pill">cdn_host</span></label>
+          <div class="ctl">
+            <input type="text" id="cdn_host" placeholder="留空默认 saas.sin.fan">
+            <select class="pick cdn-pick" data-target="cdn_host"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <p class="note"><b>SNI 安全提示：</b>不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空（内置默认值）。</p>
+      </section>
+
+      <section class="card">
+        <h2>⑥ 执行动作 <span class="tip">尾部参数</span></h2>
         <div class="row">
           <label>执行动作</label>
           <select id="sbm-tail">
@@ -385,7 +397,7 @@
   var $id = function (x) { return document.getElementById(x); };
   var val = function (x) { var e = $id(x); return e ? String(e.value).trim() : ''; };
 
-  var RELEASE_BASE = 'https://github.com/hynize/singbox-manager/releases/download/v0.2.10/install.sh';
+  var RELEASE_BASE = 'https://github.com/hynize/singbox-manager/releases/download/v0.2.11/install.sh';
   var RAW_BASE = 'https://raw.githubusercontent.com/hynize/singbox-manager/main/install.sh';
 
   var SBM_CMDS = [
@@ -525,9 +537,6 @@
       strEnv('cert_path', 'cert_path', envs);
       strEnv('key_path', 'key_path', envs);
     }
-    // HY2 带宽
-    numEnv('up_mbps', 'up_mbps', envs);
-    numEnv('down_mbps', 'down_mbps', envs);
     // Argo 固定隧道
     strEnv('agn', 'agn', envs);
     strEnv('agk', 'agk', envs);
@@ -611,6 +620,41 @@
   });
 
   renderCmdList('sbm-cmds', SBM_CMDS);
+
+  // SNI 伪装域名候选（下拉选择填入输入框，输入框仍可手输，留空用内置默认值）
+  var SNI_LIST = ['www.apple.com', 'www.bing.com', 'www.ua.edu', 'www.yahoo.com', 'dl.google.com'];
+  document.querySelectorAll('select.sni-pick').forEach(function (sel) {
+    SNI_LIST.forEach(function (d) {
+      var o = document.createElement('option');
+      o.value = d;
+      o.textContent = d;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () {
+      if (!sel.value) return;
+      var target = $id(sel.getAttribute('data-target'));
+      target.value = sel.value;
+      sel.selectedIndex = 0;
+      regen();
+    });
+  });
+
+  // CF 优选域名候选（留空默认 saas.sin.fan）
+  var CDN_LIST = ['cdns.doon.eu.org', 'cf.090227.xyz', 'cf.877771.xyz', 'cf.877774.xyz', 'cf.008500.xyz', 'cf.130519.xyz', 'cloudflare.182682.xyz', 'www.visa.sg', 'www.shopify.com', 'mfa.gov.ua', 'cf.zhetengsha.eu.org', 'cfip.xxxxxxxx.tk'];
+  var cdnSel = document.querySelector('select.cdn-pick');
+  CDN_LIST.forEach(function (d) {
+    var o = document.createElement('option');
+    o.value = d;
+    o.textContent = d;
+    cdnSel.appendChild(o);
+  });
+  cdnSel.addEventListener('change', function () {
+    if (!cdnSel.value) return;
+    $id('cdn_host').value = cdnSel.value;
+    cdnSel.selectedIndex = 0;
+    regen();
+  });
+
   syncArgo(); syncCert(); syncForm();
   regen();
 })();

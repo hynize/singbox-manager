@@ -7,7 +7,7 @@
 ## 快速安装
 
 ```bash
-bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.10/install.sh)
+bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.11/install.sh)
 sbm          # 打开交互菜单
 ```
 
@@ -16,7 +16,7 @@ sbm          # 打开交互菜单
 端口变量启用对应协议，其余可选；`rep` 清空重建（适合首次/重置），`ins` 保留已有节点追加：
 
 ```bash
-vlrt=2083 hypt=2082 name='HK' bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.10/install.sh)
+vlrt=2083 hypt=2082 name='HK' bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.11/install.sh)
 vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 ```
 
@@ -29,8 +29,8 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `passwd` | AnyTLS/HY2/TUIC 密码 | 自动生成 |
 | `name` | 节点名前缀（生成 `HK-Reality` 等） | 内置默认名 |
 | `cert` `cert_path` `key_path` | `custom` 时导入自有证书 | 自签 |
-| `vl_sni` `ws_host` `ws_path` `cdn_host` | Reality 域名 / WS SNI / WS 路径 / 优选域名 | 内置默认 |
-| `tu_sni` `any_sni` `hy_sni` | 对应协议 SNI | `www.bing.com` |
+| `vl_sni` `ws_host` `tu_sni` `any_sni` `hy_sni` | 各协议 SNI | `www.apple.com` |
+| `ws_path` `cdn_host` | WS 路径 / CF 优选域名 | 随机 / `saas.sin.fan` |
 | `up_mbps` `down_mbps` | HY2 带宽 | 200 |
 | `socks5_username` `socks5_password` | SOCKS5 账号 | user / 随机 |
 
