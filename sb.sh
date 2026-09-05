@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.14"
+SCRIPT_VERSION="0.2.15"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -2031,7 +2031,7 @@ select_node_tag() {
     idx=$((idx + 1))
   done
 
-  read -r -p "请选择节点编号: " input
+  read -r -p "请选择节点编号: " input || return 1
   if ! [[ "${input}" =~ ^[0-9]+$ ]] || [ "${input}" -lt 1 ] || [ "${input}" -gt "${#rows[@]}" ]; then
     return 1
   fi
@@ -2180,7 +2180,7 @@ menu_add_node() {
   echo "7. SOCKS5"
   echo "0. 返回"
   echo
-  read -r -p "请选择: " choice
+  read -r -p "请选择: " choice || return 0
   case "${choice}" in
   1) add_vless_reality ;;
   2) add_vless_ws_tls ;;
@@ -2219,10 +2219,10 @@ settings_menu() {
     echo "1. 分享链接默认 IP 版本   当前：$(ipver_display)"
     echo "0. 返回"
     echo
-    read -r -p "请选择: " choice || exit 0
+    read -r -p "请选择: " choice || return 0
     case "${choice}" in
     1)
-      read -r -p "IP 版本 (4/v6/auto) [4]: " value
+      read -r -p "IP 版本 (4/v6/auto) [4]: " value || continue
       value="$(normalize_input "${value:-4}")"
       case "${value,,}" in
       4 | v4) set_setting "ip_version" "4" ;;
@@ -2332,7 +2332,8 @@ main() {
   case "${action}" in
   "")
     require_root
-    main_menu
+    # 菜单内任何非零返回（如 stdin EOF）都以干净状态退出，不触发 ERR trap
+    main_menu || exit 0
     ;;
   rep | ins)
     require_root
