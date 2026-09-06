@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.16"
+SCRIPT_VERSION="0.2.17"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -146,6 +146,24 @@ prompt_safe_domain() {
       return 0
     fi
     print_warn "域名格式无效：${value}（仅允许字母数字与 . _ : -）"
+  done
+}
+
+# WS 类节点连接地址确认：默认优选域名仅在前置 CDN 已接入本机时可用，
+# 用户无意识回车会拿到"死节点"，故采用默认值前必须显式确认
+prompt_cdn_domain() {
+  local value
+  while true; do
+    value="$(prompt_safe_domain "连接地址（优选 IP/域名）" "${DEFAULT_CDN_DOMAIN}")"
+    if [ "${value}" != "${DEFAULT_CDN_DOMAIN}" ]; then
+      printf '%s' "${value}"
+      return 0
+    fi
+    print_warn "内置优选域名 ${DEFAULT_CDN_DOMAIN} 仅在该域名已接入本机前置 CDN 时可用；没有自备域名请填优选 IP 或你自己的域名。"
+    if confirm_yes "确认仍使用 ${DEFAULT_CDN_DOMAIN}？"; then
+      printf '%s' "${value}"
+      return 0
+    fi
   done
 }
 
@@ -313,20 +331,25 @@ install_release_bundle() {
 }
 
 install_singbox_core() {
-  local arch asset url tmpdir archive binary expected
+  local arch asset tmpdir archive binary expected
+  local -a urls
   arch="$(detect_arch)" || fatal "暂不支持当前 CPU 架构：$(uname -m)"
   asset="${SINGBOX_ASSET[$arch]:-}"
   expected="${SINGBOX_SHA256[$arch]:-}"
   [ -n "${asset}" ] || fatal "未配置 ${arch} 对应的 sing-box 安装包。"
   [ -n "${expected}" ] || fatal "未配置 ${arch} 对应的 sing-box 校验值。"
 
-  url="https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/${asset}"
+  # 官方源优先，官方源不可达时回退本仓库镜像（SHA256 校验不因换源放松）
+  local -a urls=()
+  urls+=("https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/${asset}")
+  [ -n "${SINGBOX_MIRROR_BASE:-}" ] && urls+=("${SINGBOX_MIRROR_BASE}/${asset}")
+
   tmpdir="$(mktemp -d)"
   archive="${tmpdir}/${asset}"
   print_info "正在安装 sing-box ${SINGBOX_VERSION} (${arch})"
-  if ! download_file "${url}" "${archive}"; then
+  if ! download_file_multi "${archive}" "${urls[@]}"; then
     rm -rf "${tmpdir}"
-    fatal "下载 sing-box 失败：${url}"
+    fatal "下载 sing-box 失败（已尝试 ${#urls[@]} 个源）。"
   fi
   verify_sha256 "${archive}" "${expected}"
   tar -xzf "${archive}" -C "${tmpdir}"
@@ -339,42 +362,81 @@ install_singbox_core() {
 }
 
 install_cloudflared_bin() {
-  local arch asset url tmpfile expected version
+  local arch asset tmpfile expected version
+  local verify_mode
   arch="$(detect_arch)" || fatal "暂不支持当前 CPU 架构：$(uname -m)"
   asset="${CLOUDFLARED_ASSET[$arch]:-}"
   [ -n "${asset}" ] || fatal "未配置 ${arch} 对应的 cloudflared 安装包。"
 
+  # 校验模式：sha256=官方 digest 完整校验；runtime=digest 不可得时降级为
+  # "来源仍为官方 Release + 下载后实测版本一致 + 可执行校验"；固定版本表始终完整校验
+  verify_mode="sha256"
   version="${CLOUDFLARED_VERSION:-}"
   expected="${CLOUDFLARED_SHA256[$arch]:-}"
   if [ "${CLOUDFLARED_LATEST:-false}" = "true" ]; then
-    # fail-closed：拿不到官方版本或 digest 一律拒绝安装，绝不跳过校验
-    if ! version="$(cloudflared_latest_version)"; then
-      fatal "无法获取 cloudflared 最新版本，拒绝继续安装。"
+    # 第一层：GitHub API（版本+digest）
+    if version="$(cloudflared_latest_version)" && expected="$(cloudflared_latest_digest "${asset}")"; then
+      print_info "cloudflared 官方最新版本：${version}"
+    else
+      # 第二层：版本经 jsdelivr/固定表确定，digest 不可得时降级为运行时校验
+      expected=""
+      if [ -z "${version}" ]; then
+        version="${CLOUDFLARED_FALLBACK_VERSION:-}"
+      fi
+      [ -n "${version}" ] || fatal "无法获取 cloudflared 最新版本，且未配置回退版本，拒绝继续安装。"
+      verify_mode="runtime"
+      if [ -n "${CLOUDFLARED_SHA256[$arch]:-}" ] && [ "${version}" = "${CLOUDFLARED_FALLBACK_VERSION:-}" ]; then
+        # 版本与固定回退版本一致时仍可用固定 digest 完整校验
+        expected="${CLOUDFLARED_SHA256[$arch]}"
+        verify_mode="sha256"
+        print_warn "GitHub API 不可用，回退固定版本 cloudflared ${version}（完整 SHA256 校验）。"
+      else
+        print_warn "无法获取 cloudflared ${version} 的官方 digest，降级为运行时版本校验（来源仍为官方 Release）。"
+      fi
     fi
-    if ! expected="$(cloudflared_latest_digest "${asset}")"; then
-      fatal "无法获取 cloudflared ${version} 的官方 digest，拒绝安装未校验的二进制。"
-    fi
-    print_info "cloudflared 官方最新版本：${version}"
   else
     [ -n "${version}" ] || fatal "未配置 cloudflared 版本。"
     [ -n "${expected}" ] || fatal "未配置 ${arch} 对应的 cloudflared 校验值，拒绝安装未校验的二进制。"
   fi
 
-  url="https://github.com/cloudflare/cloudflared/releases/download/${version}/${asset}"
+  # 官方源优先，官方源不可达时回退本仓库镜像
+  local -a urls=()
+  urls+=("https://github.com/cloudflare/cloudflared/releases/download/${version}/${asset}")
+  [ -n "${CLOUDFLARED_MIRROR_BASE:-}" ] && urls+=("${CLOUDFLARED_MIRROR_BASE}/${asset}")
+
   tmpfile="$(mktemp)"
   print_info "正在安装 cloudflared ${version} (${arch})"
-  if ! download_file "${url}" "${tmpfile}"; then
+  if ! download_file_multi "${tmpfile}" "${urls[@]}"; then
     rm -f "${tmpfile}"
-    fatal "下载 cloudflared 失败：${url}"
+    fatal "下载 cloudflared 失败（已尝试 ${#urls[@]} 个源）。"
   fi
-  verify_sha256 "${tmpfile}" "${expected}"
+
+  if [ "${verify_mode}" = "sha256" ]; then
+    verify_sha256 "${tmpfile}" "${expected}"
+  else
+    # 运行时校验：二进制可执行且自报版本与期望一致，防损坏/HTML 错误页/错版本
+    chmod 0755 "${tmpfile}"
+    local actual_version
+    actual_version="$("${tmpfile}" version 2>/dev/null | grep -oE '[0-9]{4}\.[0-9]+\.[0-9]+' | head -n 1 || true)"
+    [ "${actual_version}" = "${version}" ] || {
+      rm -f "${tmpfile}"
+      fatal "cloudflared 运行时校验失败：期望 ${version}，实际 ${actual_version:-无法运行}。"
+    }
+  fi
   install -m 0755 "${tmpfile}" "${CLOUDFLARED_BIN}"
   ensure_binary_runs "${CLOUDFLARED_BIN}" "cloudflared" version
   rm -f "${tmpfile}"
-  print_ok "cloudflared 已安装到 ${CLOUDFLARED_BIN}"
+  print_ok "cloudflared 已安装到 ${CLOUDFLARED_BIN}（${version}，校验：${verify_mode}）"
 }
 
 create_systemd_units() {
+  local mem_line=""
+  local mem_limit
+  mem_limit="$(go_mem_limit_value)"
+  if [ -n "${mem_limit}" ]; then
+    mem_line="Environment=GOMEMLIMIT=${mem_limit}"
+  fi
+
   cat >"${SYSTEMD_SERVICE_FILE}" <<EOF
 [Unit]
 Description=Singbox Manager
@@ -384,7 +446,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${BASE_DIR}
+ExecStartPre=/bin/mkdir -p ${BASE_DIR}/logs ${RUNTIME_DIR}
 ExecStartPre=${SINGBOX_BIN} check -c ${CONFIG_FILE}
+${mem_line}
 ExecStart=${SINGBOX_BIN} run -c ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=3
@@ -450,6 +514,13 @@ EOF
 }
 
 create_openrc_units() {
+  local mem_line=""
+  local mem_limit
+  mem_limit="$(go_mem_limit_value)"
+  if [ -n "${mem_limit}" ]; then
+    mem_line="export GOMEMLIMIT=${mem_limit}"
+  fi
+
   cat >"${OPENRC_SERVICE_FILE}" <<EOF
 #!/sbin/openrc-run
 
@@ -465,7 +536,9 @@ depend() {
 }
 
 start_pre() {
+  mkdir -p ${BASE_DIR}/logs ${RUNTIME_DIR}
   ${SINGBOX_BIN} check -c ${CONFIG_FILE} >/dev/null
+  ${mem_line}
 }
 EOF
 
@@ -531,12 +604,28 @@ stop_service() {
   fi
 }
 
+# 低内存守卫：小内存机（默认 <200MB）提示资源约束；watchdog/cloudflared 侧已自动收紧
+ensure_low_memory_guard() {
+  local total_kb avail_mb low_mb
+  low_mb="${SBM_LOW_MEM_MB:-200}"
+  total_kb="$(awk '/^(MemTotal|MemTotal:)/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)"
+  [ -n "${total_kb}" ] || return 0
+  avail_mb=$((total_kb / 1024))
+  if [ "${avail_mb}" -lt "${low_mb}" ]; then
+    print_warn "检测到低内存环境（约 ${avail_mb}MB < ${low_mb}MB）：已为 sing-box/cloudflared 设置 GOMEMLIMIT 软上限并强制 cloudflared http2 模式。"
+    print_warn "建议少开协议节点、避免同时开启多个 Argo 节点；隧道进程内存尖峰靠 Go 软上限抑制。"
+  fi
+}
+
 start_service() {
   detect_systemd
   [ -x "${SINGBOX_BIN}" ] || fatal "尚未安装 sing-box。"
   rotate_log_file "${BASE_DIR}/logs/sing-box.log" || true
   "${SINGBOX_BIN}" check -c "${CONFIG_FILE}" >/dev/null
   warn_if_bindv6only
+
+  local mem_limit
+  mem_limit="$(go_mem_limit_value)"
 
   if [ "${has_systemd}" = true ]; then
     systemctl daemon-reload
@@ -547,7 +636,12 @@ start_service() {
     rc-service "${SERVICE_NAME}" restart >/dev/null 2>&1 || rc-service "${SERVICE_NAME}" start >/dev/null 2>&1
   else
     stop_service
-    nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${BASE_DIR}/logs/sing-box.log" 2>&1 &
+    if [ -n "${mem_limit}" ]; then
+      # GOMEMLIMIT 软上限防 OOM（接近上限时 Go 运行时自动加速 GC）
+      nohup env GOMEMLIMIT="${mem_limit}" "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${BASE_DIR}/logs/sing-box.log" 2>&1 &
+    else
+      nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${BASE_DIR}/logs/sing-box.log" 2>&1 &
+    fi
     write_pid_file "${PID_FILE}" "$!"
   fi
 
@@ -562,6 +656,7 @@ install_core() {
   sync_project_assets_from_source
   install_singbox_core
   install_cloudflared_bin
+  ensure_low_memory_guard
   render_config
   if [ "${has_systemd}" = true ]; then
     create_systemd_units
@@ -1045,17 +1140,19 @@ start_argo_node() {
   if [ "${mode}" = "token" ]; then
     token="$(secret_value "$tag" "argo_token")"
     # token 经环境变量传入，避免明文出现在进程命令行（ps 可见）
-    TUNNEL_TOKEN="${token}" nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run \
+    # --protocol http2：压掉 QUIC 内存尖峰（30-50MB → 25-40MB），小内存机更稳
+    TUNNEL_TOKEN="${token}" nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --protocol http2 --edge-ip-version "${edge_ip}" run \
       >>"${log_file}" 2>&1 &
     write_pid_file "${pid_file}" "$!"
     return 0
   fi
 
-  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${port}" \
+  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --protocol http2 --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${port}" \
     >>"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 
-  if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
+  # 等待域名出现且确认公共 DNS 已发布（DoH 核验，防"看似成功实则不可解析"）
+  if domain="$(wait_for_trycloudflare_domain_verified "${log_file}" 60 1)"; then
     if ! json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"; then
       cleanup_argo_pid "${pid_file}"
       return 1
@@ -1063,7 +1160,7 @@ start_argo_node() {
   else
     cleanup_argo_pid "${pid_file}"
     json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
-    print_err "等待 ${tag} 的临时 Argo 域名超时。"
+    print_err "等待 ${tag} 的临时 Argo 域名超时（含 DNS 发布确认）。"
     return 1
   fi
 }
@@ -1136,7 +1233,7 @@ add_vless_ws_tls() {
   name="$(prompt_with_default "节点名称" "VLESS-WS-TLS")"
   uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
-  preferred_domain="$(prompt_safe_domain "优选域名" "${DEFAULT_CDN_DOMAIN}")"
+  preferred_domain="$(prompt_cdn_domain)"
   host_domain="$(prompt_safe_domain "Host/SNI 域名" "${DEFAULT_TLS_SERVER}")"
   ws_path="$(prompt_with_default "WebSocket 路径" "$(random_ws_path)")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$host_domain")"
@@ -1234,7 +1331,7 @@ add_vless_argo() {
   name="$(prompt_with_default "节点名称" "VLESS-Argo")"
   uuid="$(prompt_optional_value "UUID（留空自动生成）")"
   uuid="${uuid:-$(generate_uuid)}"
-  preferred_domain="$(prompt_safe_domain "优选域名" "${DEFAULT_CDN_DOMAIN}")"
+  preferred_domain="$(prompt_cdn_domain)"
   ws_path="$(prompt_with_default "WebSocket 路径" "$(random_ws_path)")"
   argo_mode="$(prompt_choice "隧道模式 (temp/token)" "temp")"
   if [ "${argo_mode}" = "token" ]; then
@@ -1921,6 +2018,11 @@ auto_install() {
   ENV_WS_HOST="$(env_domain_or_default "ws_host" "${DEFAULT_TLS_SERVER}")"
   ENV_WS_PATH="$(env_var "ws_path")"
   ENV_CDN_HOST="$(env_domain_or_default "cdn_host" "${DEFAULT_CDN_DOMAIN}")"
+  # 默认优选域名仅在前置 CDN 已接入本机时可用；一键安装不中断，但必须让用户看见
+  if [ "${ENV_CDN_HOST}" = "${DEFAULT_CDN_DOMAIN}" ] && [ "${confirm_default_cdn:-}" != "1" ]; then
+    print_warn "⚠️ 未设置有效 cdn_host：WS 类节点将使用内置优选域名 ${DEFAULT_CDN_DOMAIN}（仅该域名已接入本机前置 CDN 时可达）。"
+    print_warn "   请改用 cdn_host=你的优选域名或IP 重新执行；确认使用默认值可加 confirm_default_cdn=1 消除本提示。"
+  fi
   ENV_SOCKS5_USER="$(env_var "socks5_username")"
   ENV_SOCKS5_PASS="$(env_var "socks5_password")"
 
@@ -2015,6 +2117,29 @@ print_node_list() {
 
   if [ "${idx}" -eq 1 ]; then
     echo "当前没有节点。"
+  fi
+}
+
+# 生成 base64 订阅内容（全部节点分享链接逐行 base64，输出到 stdout 或文件）
+sub_command() {
+  local out_file="${1:-}"
+  local links="" tag content
+  init_storage
+  while IFS= read -r tag; do
+    [ -n "${tag}" ] || continue
+    links+="$(build_share_link "${tag}")"$'\n'
+  done < <(iter_node_tags)
+  if [ -z "${links//[$'\n']/}" ]; then
+    print_err "当前没有可输出的节点。"
+    return 1
+  fi
+  content="$(printf '%s' "${links}" | base64 | tr -d '\n')"
+  if [ -n "${out_file}" ]; then
+    printf '%s\n' "${content}" >"${out_file}"
+    chmod 600 "${out_file}" 2>/dev/null || true
+    print_ok "订阅已写入：${out_file}（节点数：$(printf '%s' "${links}" | grep -c .)）"
+  else
+    printf '%s\n' "${content}"
   fi
 }
 
@@ -2116,8 +2241,12 @@ restart_stack() {
 
 update_script() {
   local latest_tag
-  if ! latest_tag="$(curl -fsSL --retry 3 --retry-delay 2 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | jq -r '.tag_name // empty')"; then
-    fatal "无法获取最新发布版本。"
+  # 首选 GitHub API；不可用时回退 jsdelivr 镜像索引（只接受 v0.0.0 语义化 tag，
+  # 防止二进制镜像等特殊 tag 混入）
+  latest_tag="$(curl -fsSL --retry 3 --retry-delay 2 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" 2>/dev/null | jq -r '.tag_name // empty' 2>/dev/null || true)"
+  if [ -z "${latest_tag}" ]; then
+    latest_tag="$(curl -fsSL --retry 2 --max-time 20 "https://data.jsdelivr.com/v1/package/gh/${REPO_OWNER}/${REPO_NAME}" 2>/dev/null | jq -r '.versions[]? | select(type == "string" and test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))' 2>/dev/null | head -n 1 || true)"
+    [ -n "${latest_tag}" ] && print_info "GitHub API 不可用，已经 jsdelivr 获取最新版本：${latest_tag}"
   fi
   [ -n "${latest_tag}" ] || fatal "无法获取最新发布版本。"
   acquire_lock
@@ -2321,6 +2450,7 @@ print_cli_usage() {
   rep        覆盖式一键安装：备份后清空已有节点，按环境变量重建并启动
   ins        追加式一键安装：备份后保留已有节点，按环境变量追加节点并启动
   list       查看节点与分享链接
+  sub [文件] 输出 base64 订阅内容（不带文件参数打印到 stdout，带则写入文件）
   delall     删除全部节点（含证书）并重启服务
   restore    从最近一次状态备份恢复节点
   un         卸载本项目
@@ -2349,6 +2479,10 @@ main() {
     echo
     print_node_list
     echo
+    ;;
+  sub)
+    require_root
+    sub_command "${2:-}"
     ;;
   delall)
     require_root

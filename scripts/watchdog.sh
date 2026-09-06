@@ -44,7 +44,13 @@ start_non_systemd_singbox() {
   fi
 
   rotate_log_file "${LOG_DIR}/sing-box.log" || true
-  nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${LOG_DIR}/sing-box.log" 2>&1 &
+  local mem_limit
+  mem_limit="$(go_mem_limit_value)"
+  if [ -n "${mem_limit}" ]; then
+    nohup env GOMEMLIMIT="${mem_limit}" "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${LOG_DIR}/sing-box.log" 2>&1 &
+  else
+    nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${LOG_DIR}/sing-box.log" 2>&1 &
+  fi
   write_pid_file "${PID_FILE}" "$!"
 }
 
@@ -102,12 +108,13 @@ start_temp_tunnel() {
   json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
   release_lock
   edge_ip="$(argo_edge_ip_version)"
-  # 追加模式写入（O_APPEND）：轮转截断后写入偏移自动归零，避免稀疏文件
-  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${local_port}" \
+  # --protocol http2：压掉 QUIC 内存尖峰；追加模式写入（O_APPEND）避免轮转后稀疏文件
+  nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --protocol http2 --edge-ip-version "${edge_ip}" --url "http://127.0.0.1:${local_port}" \
     >>"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 
-  if domain="$(wait_for_trycloudflare_domain "${log_file}" 60 2)"; then
+  # 域名需通过公共 DNS 发布确认（DoH）才写入节点，防止"看似成功实则不可解析"
+  if domain="$(wait_for_trycloudflare_domain_verified "${log_file}" 60 1)"; then
     acquire_lock
     if jq -e --arg tag "$tag" 'has($tag)' "${NODES_FILE}" >/dev/null 2>&1; then
       if ! json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"; then
@@ -123,7 +130,7 @@ start_temp_tunnel() {
     acquire_lock
     json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
     release_lock
-    print_warn "等待 ${tag} 的临时 Argo 域名超时，已清除旧域名。"
+    print_warn "等待 ${tag} 的临时 Argo 域名超时（含 DNS 发布确认），已清除旧域名。"
   fi
 }
 
@@ -142,7 +149,7 @@ start_token_tunnel() {
   chmod 600 "${log_file}"
   edge_ip="$(argo_edge_ip_version)"
   # token 经环境变量传入，避免明文出现在进程命令行（ps 可见）
-  TUNNEL_TOKEN="${token}" nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --edge-ip-version "${edge_ip}" run \
+  TUNNEL_TOKEN="${token}" nohup "${CLOUDFLARED_BIN}" tunnel --no-autoupdate --protocol http2 --edge-ip-version "${edge_ip}" run \
     >>"${log_file}" 2>&1 &
   write_pid_file "${pid_file}" "$!"
 }

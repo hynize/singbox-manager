@@ -93,13 +93,31 @@ handle_common_error() {
 download_file() {
   local url="$1"
   local out="$2"
+  # curl 失败自动换 wget 再试：弱网/单工具缺失时仍可交付
   if command_exists curl; then
-    curl -fsSL --retry 3 --connect-timeout 10 "$url" -o "$out"
-  elif command_exists wget; then
-    wget -qO "$out" "$url"
-  else
-    fatal "需要安装 curl 或 wget。"
+    curl -fsSL --retry 3 --connect-timeout 10 "$url" -o "$out" && return 0
   fi
+  if command_exists wget; then
+    wget -qO "$out" --tries=3 --timeout=30 "$url" && return 0
+  fi
+  if command_exists curl || command_exists wget; then
+    return 1
+  fi
+  fatal "需要安装 curl 或 wget。"
+}
+
+# 多源依次尝试下载：全部失败才返回非零（SHA256 校验由调用方执行，不因换源放松）
+download_file_multi() {
+  local out="$1"
+  shift
+  local url
+  for url in "$@"; do
+    [ -n "${url}" ] || continue
+    if download_file "${url}" "${out}"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 sha256_file() {
@@ -605,6 +623,14 @@ ensure_tls_material() {
   printf '%s|%s' "$cert_file" "$key_file"
 }
 
+# 提取自签证书 SHA-256 指纹（DER 形式，hex 小写）；用于分享链接 pinSHA256 固定证书，
+# 替代部分新版客户端已拒绝的 allowInsecure 参数
+cert_fingerprint() {
+  local cert_file="$1"
+  [ -f "${cert_file}" ] || return 1
+  openssl x509 -in "${cert_file}" -outform DER 2>/dev/null | openssl dgst -sha256 -r 2>/dev/null | awk '{print $1}'
+}
+
 parse_trycloudflare_domain() {
   local log_file="$1"
   grep -aoE '[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | tail -n 1
@@ -625,6 +651,55 @@ wait_for_trycloudflare_domain() {
     fi
     sleep "${interval}"
     elapsed=$((elapsed + interval))
+  done
+
+  return 1
+}
+
+# 核验临时隧道域名已进入公共 DNS（系统解析 + 1.1.1.1 DoH 双确认），
+# 避免提交"日志已出现但实际不可解析"的域名（本机负缓存/解析器差异）
+argo_domain_resolvable() {
+  local domain="$1"
+  [ -n "${domain}" ] || return 1
+
+  # 快路径：本机解析成功即可确认（getent/host 退出码可靠）
+  if command_exists getent; then
+    if getent ahosts "${domain}" >/dev/null 2>&1; then
+      return 0
+    fi
+  elif command_exists host; then
+    if host "${domain}" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  # 本地解析不可用或未命中：查 Cloudflare DoH 公共记录（绕开本机负缓存）
+  if command_exists curl && command_exists jq; then
+    if [ "$(curl -fsS --max-time 8 -H 'accept: application/dns-json' "https://1.1.1.1/dns-query?name=${domain}.&type=A" 2>/dev/null | jq -r '[.Answer[]? | select(.type == 1)] | length' 2>/dev/null || printf 0)" -gt 0 ]; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# 等待域名出现并确认 DNS 已发布；最多重试 retry 次（每次重新等日志域名）
+wait_for_trycloudflare_domain_verified() {
+  local log_file="$1"
+  local timeout="${2:-60}"
+  local retry="${3:-1}"
+  local domain attempt
+
+  for attempt in 0 1 2; do
+    [ "${attempt}" -le "${retry}" ] || break
+    domain="$(wait_for_trycloudflare_domain "${log_file}" "${timeout}" 2 || true)"
+    [ -n "${domain}" ] || continue
+    if argo_domain_resolvable "${domain}"; then
+      printf '%s' "${domain}"
+      return 0
+    fi
+    print_warn "临时域名 ${domain} 尚未进入公共 DNS，等待发布后重试..."
+    sleep 5
   done
 
   return 1
@@ -672,8 +747,16 @@ cloudflared_latest_release_json() {
 
 cloudflared_latest_version() {
   local json tag
-  json="$(cloudflared_latest_release_json)" || return 1
-  tag="$(printf '%s' "${json}" | jq -r '.tag_name // empty')"
+  # 首选 GitHub API（含 digest 数据）；不可用时回退 jsdelivr 镜像索引（仅版本号）
+  json="$(cloudflared_latest_release_json 2>/dev/null || true)"
+  if [ -n "${json}" ]; then
+    tag="$(printf '%s' "${json}" | jq -r '.tag_name // empty' 2>/dev/null || true)"
+    if [ -n "${tag}" ]; then
+      printf '%s' "${tag}"
+      return 0
+    fi
+  fi
+  tag="$(curl -fsSL --retry 2 --max-time 20 "https://data.jsdelivr.com/v1/package/gh/cloudflare/cloudflared" 2>/dev/null | jq -r '.versions[]? | select(type == "string" and test("^[0-9]{4}\\.[0-9]+\\.[0-9]+$"))' 2>/dev/null | head -n 1 || true)"
   [ -n "${tag}" ] || return 1
   printf '%s' "${tag}"
 }
@@ -681,8 +764,9 @@ cloudflared_latest_version() {
 cloudflared_latest_digest() {
   local asset="$1"
   local json digest
-  json="$(cloudflared_latest_release_json)" || return 1
-  digest="$(printf '%s' "${json}" | jq -r --arg name "${asset}" '.assets[] | select(.name == $name) | .digest // empty' | sed 's/^sha256://')"
+  json="$(cloudflared_latest_release_json 2>/dev/null || true)"
+  [ -n "${json}" ] || return 1
+  digest="$(printf '%s' "${json}" | jq -r --arg name "${asset}" '.assets[] | select(.name == $name) | .digest // empty' 2>/dev/null | sed 's/^sha256://')"
   [ -n "${digest}" ] || return 1
   printf '%s' "${digest}"
 }
@@ -784,6 +868,49 @@ rotate_log_file() {
   return 0
 }
 
+# 按 min(可见内存, cgroup memory.max/high) 计算 Go 运行时软内存上限（MiB），
+# 防止小内存机/受限容器（cgroup 上限低于物理内存）OOM；
+# 结果不低于下限，上限比例可被 SBM_GOMEM_LIMIT_PCT 覆盖（默认 45%）
+compute_go_mem_limit_mb() {
+  local pct="${SBM_GOMEM_LIMIT_PCT:-45}"
+  local floor_mb="${SBM_GOMEM_FLOOR_MB:-32}"
+  local total_kb limit_mb v
+
+  total_kb="$(awk '/^(MemTotal|MemTotal:)/ { print $2; exit }' /proc/meminfo 2>/dev/null || true)"
+  [ -n "${total_kb}" ] || total_kb=0
+
+  local f
+  for f in /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.high; do
+    [ -r "${f}" ] || continue
+    v="$(tr -d ' \r\n' <"${f}" 2>/dev/null || true)"
+    [ -n "${v}" ] || continue
+    [ "${v}" = "max" ] && continue
+    [[ "${v}" =~ ^[0-9]+$ ]] || continue
+    [ "${v}" -le 0 ] && continue
+    if [ "${total_kb}" -le 0 ] || [ "$((v / 1024))" -lt "${total_kb}" ]; then
+      total_kb=$((v / 1024))
+    fi
+  done
+
+  if [ "${total_kb}" -le 0 ]; then
+    return 1
+  fi
+
+  limit_mb=$((total_kb * 1024 * pct / 100 / 1024 / 1024))
+  if [ "${limit_mb}" -lt "${floor_mb}" ]; then
+    limit_mb="${floor_mb}"
+  fi
+  printf '%s' "${limit_mb}"
+}
+
+# 输出注入用 GOMEMLIMIT 值；无法探测内存时输出空（不注入）
+go_mem_limit_value() {
+  local mb
+  mb="$(compute_go_mem_limit_mb 2>/dev/null || true)"
+  [ -n "${mb}" ] || return 0
+  printf '%sMiB' "${mb}"
+}
+
 build_share_link() {
   local tag="$1"
   local protocol name port public_ip host uuid password username
@@ -864,7 +991,13 @@ build_share_link() {
     printf 'hysteria2://%s@%s:%s?sni=%s' \
       "$(url_encode "$password")" "$host" "$port" "$tls_server"
     if [ "$cert_mode" = "self-signed" ]; then
-      printf '&insecure=1'
+      # 自签优先固定证书指纹（新版客户端已拒绝 insecure）；无指纹再退回 insecure=1
+      fp="$(cert_fingerprint "$(node_value "$tag" "certificate_path")" 2>/dev/null || true)"
+      if [ -n "${fp}" ]; then
+        printf '&pinSHA256=%s' "${fp}"
+      else
+        printf '&insecure=1'
+      fi
     fi
     printf '#%s' "$(url_encode "$name")"
     ;;

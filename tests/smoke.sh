@@ -114,7 +114,16 @@ assert_eval_true "Reality 链接含缓存公网 IP" 'build_share_link n1 | grep 
 
 json_set_record "${NODES_FILE}" "n2" '{"protocol":"hy2","name":"Hysteria2","port":11443,"tls_server":"www.bing.com","certificate_mode":"self-signed"}'
 json_set_record "${SECRETS_FILE}" "n2" '{"password":"pw123"}'
-assert_eval_true "hy2 自签链接含 insecure=1" 'build_share_link n2 | grep -q "insecure=1"'
+assert_eval_true "hy2 自签无指纹时回退 insecure=1" 'build_share_link n2 | grep -q "insecure=1"'
+
+json_set_record "${NODES_FILE}" "n2b" '{"protocol":"hy2","name":"Hysteria2-Pin","port":11444,"tls_server":"www.bing.com","certificate_mode":"self-signed","certificate_path":"cert"}'
+json_set_record "${SECRETS_FILE}" "n2b" '{"password":"pw123"}'
+# 为 n2b 生成真实自签证书供指纹提取
+pin_pair="$(ensure_tls_material tag_pin www.bing.com)"
+jq --arg p "${pin_pair%|*}" '.n2b.certificate_path = $p' "${NODES_FILE}" >"${NODES_FILE}.tmp" && mv "${NODES_FILE}.tmp" "${NODES_FILE}"
+assert_eval_true "hy2 自签有证书时输出 pinSHA256" 'build_share_link n2b | grep -q "pinSHA256=[0-9a-f]\{64\}"'
+assert_eval_false "hy2 pin 链接不再含 insecure" 'build_share_link n2b | grep -q "insecure=1"'
+assert_eval_true "cert_fingerprint 输出 64 位 hex" 'fp="$(cert_fingerprint "${pin_pair%|*}")"; [[ "${fp}" =~ ^[0-9a-f]{64}$ ]]'
 
 json_set_record "${NODES_FILE}" "n3" '{"protocol":"socks5","name":"SOCKS5","port":1080,"username":"user"}'
 json_set_record "${SECRETS_FILE}" "n3" '{"password":"pw456"}'
@@ -192,6 +201,14 @@ head -c 2048 /dev/zero >>"${big_file}"
 LOG_ROTATE_SIZE_MB=0 rotate_log_file "${big_file}" || true
 assert_eval_true "rotate_log_file 产生轮转文件" '[ -f "${big_file}.1" ]'
 
+# --- v0.2.17：GOMEMLIMIT 计算 / DoH 域名确认 / 多源下载 ---
+assert_eval_true "compute_go_mem_limit_mb 输出正整数" 'v="$(compute_go_mem_limit_mb)"; [[ "${v}" =~ ^[0-9]+$ ]] && [ "${v}" -gt 0 ]'
+assert_eval_true "compute_go_mem_limit_mb 不低于下限" 'v="$(SBM_GOMEM_FLOOR_MB=9999 compute_go_mem_limit_mb)"; [ "${v}" = "9999" ]'
+assert_eval_true "go_mem_limit_value 带 MiB 后缀" 'v="$(go_mem_limit_value)"; [ -z "${v}" ] || [[ "${v}" =~ ^[0-9]+MiB$ ]]'
+assert_eval_true "argo_domain_resolvable 公网域名可解析" 'argo_domain_resolvable cloudflare.com'
+assert_eval_false "argo_domain_resolvable 无效域名拒绝" 'argo_domain_resolvable "nonexistent-sbm-test.invalid"'
+assert_eval_false "download_file_multi 全部源失败返回非零" 'download_file_multi "${TEST_ROOT}/dl.out" "https://sbm.invalid/nonexist-a" "https://sbm.invalid/nonexist-b"'
+
 # --- CLI 用法输出 ---
 assert_eval_true "print_cli_usage 可执行" 'print_cli_usage | grep -q "用法"'
 
@@ -241,6 +258,10 @@ assert_eval_true "WS inbound 路径生效" 'jq -e ".inbounds[] | select(.transpo
 assert_eval_true "SOCKS5 inbound 用户生效" 'jq -e ".inbounds[] | select(.type == \"socks\" and .users[0].username == \"u1\")" "${CONFIG_FILE}" >/dev/null'
 assert_eval_true "vless 使用指定 uuid" 'jq -e ".inbounds[].users[]? | select(.uuid == \"11111111-2222-3333-4444-555555555555\")" "${CONFIG_FILE}" >/dev/null'
 assert_eval_true "sing-box stub 已启动" 'pid="$(read_pid_file "${PID_FILE}")"; [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null'
+
+# sbm sub：base64 订阅输出（6 节点）
+assert_eval_true "sub 输出非空 base64" 'c="$(sub_command)"; [ "${#c}" -gt 100 ] && [[ "${c}" =~ ^[A-Za-z0-9+/=]+$ ]]'
+assert_eval_true "sub 解码后包含节点链接" 'c="$(sub_command)"; printf %s "${c}" | base64 -d | grep -q "vless://"'
 
 # 重复 ins：端口已被现有节点占用，全部跳过 → added=0 退出码 1（子 shell 中运行以捕获 exit）
 assert_eval_false "重复 ins 端口冲突时拒绝" '( auto_install ins )'

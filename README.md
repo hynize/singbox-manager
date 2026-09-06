@@ -7,7 +7,7 @@
 ## 快速安装
 
 ```bash
-bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.11/install.sh)
+bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/latest/download/install.sh)
 sbm          # 打开交互菜单
 ```
 
@@ -16,7 +16,7 @@ sbm          # 打开交互菜单
 端口变量启用对应协议，其余可选；`rep` 清空重建（适合首次/重置），`ins` 保留已有节点追加：
 
 ```bash
-vlrt=2083 hypt=2082 name='HK' bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/download/v0.2.11/install.sh)
+vlrt=2083 hypt=2082 name='HK' bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/latest/download/install.sh)
 vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 ```
 
@@ -25,12 +25,14 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `vlrt` `wspt` `tupt` `anypt` `hypt` `socks5pt` | 各协议端口，填了即启用 | 不启用 |
 | `argo=vlpt` `argo_pt` | 启用 VLESS-Argo；本地端口 | 8001 |
 | `agn` `agk` | Argo 固定隧道域名 + Token（临时隧道留空） | 临时隧道 |
+| `cdn_host` | WS 类节点连接地址（优选 IP/域名）。**内置默认仅在前置 CDN 已接入本机时可用**，请填自己的域名或优选 IP | `saas.sin.fan` |
+| `confirm_default_cdn=1` | 确知并接受默认优选域名时消除对应警告 | 未设置 |
 | `uuid` | VLESS/TUIC 共用 UUID | 自动生成 |
 | `passwd` | AnyTLS/HY2/TUIC 密码 | 自动生成 |
 | `name` | 节点名前缀（生成 `HK-Reality` 等） | 内置默认名 |
 | `cert` `cert_path` `key_path` | `custom` 时导入自有证书 | 自签 |
 | `vl_sni` `ws_host` `tu_sni` `any_sni` `hy_sni` | 各协议 SNI | `www.apple.com` |
-| `ws_path` `cdn_host` | WS 路径 / CF 优选域名 | 随机 / `saas.sin.fan` |
+| `ws_path` | WS 路径 | 随机 |
 | `up_mbps` `down_mbps` | HY2 带宽 | 200 |
 | `socks5_username` `socks5_password` | SOCKS5 账号 | user / 随机 |
 
@@ -40,6 +42,7 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 sbm           交互菜单（安装/添加/查看/删除/重启/状态/更新/卸载/全局设置）
 sbm rep|ins   环境变量一键安装（自动快照备份；rep 端口非法时直接拒绝，不动现有数据）
 sbm list      查看节点与分享链接
+sbm sub [文件] 输出 base64 订阅（不带参数打印到 stdout，带文件参数写入文件）
 sbm delall    删除全部节点（含证书，自动快照）
 sbm restore   从最近一次快照恢复节点
 sbm un        卸载
@@ -59,9 +62,11 @@ tests/smoke.sh               冒烟测试
 
 ## 说明
 
-- 稳健性：`rep`/`ins`/`delall` 前自动快照到 `backups/`（保留 10 份），`sbm restore` 一键回滚；watchdog 每轮自动对账清理孤儿记录；cloudflared 拿不到官方 digest 时拒绝安装（fail-closed）；Argo Token 经环境变量传递，不出现在进程命令行
+- 稳健性：`rep`/`ins`/`delall` 前自动快照到 `backups/`（保留 10 份），`sbm restore` 一键回滚；watchdog 每轮自动对账清理孤儿记录；Argo 临时域名经公共 DNS（DoH）发布确认后才写入节点；Argo Token 经环境变量传递，不出现在进程命令行
+- 交付韧性：sing-box/cloudflared 多下载源回退（官方 → 本仓库镜像）；cloudflared 版本查询 GitHub API 不可用时回退 jsdelivr，digest 不可得时降级运行时版本校验，固定版本表始终完整 SHA256 校验
+- 低内存：sing-box/cloudflared 按物理内存与 cgroup 上限自动设置 `GOMEMLIMIT` 软上限（防 OOM）；cloudflared 默认 `http2` 模式压内存尖峰；低于 200MB 内存自动提示资源约束
 - 保活：systemd 环境用 service + timer；OpenRC/无 systemd 用 cron + pidfile，cloudflared 异常退出约 1 分钟内自动拉起
-- 安全：`set -eEuo pipefail`、`umask 077`、secrets/证书/pid 全部 600；sing-box 固定版本 + SHA256，cloudflared 跟随官方最新版并校验 digest
+- 安全：`set -eEuo pipefail`、`umask 077`、secrets/证书/pid 全部 600；sing-box 固定版本 + SHA256，cloudflared 跟随官方最新版并优先校验 digest
 - CI：shellcheck / bash -n / shfmt / 冒烟测试 / 可复现 bundle 构建
 - 上游版本见 `metadata/upstream.env`
 
@@ -70,6 +75,10 @@ tests/smoke.sh               冒烟测试
 1. 更新代码与 `VERSION`
 2. `bash scripts/build-release-bundle.sh`，将新校验值同步到 `install.sh`
 3. 上传 bundle、checksums.txt、install.sh 到 GitHub Release
+
+### 可选：二进制镜像源
+
+在仓库创建 `upgrade-mirror` Release 并上传 `metadata/upstream.env` 中列出的 sing-box 压缩包与 cloudflared 二进制（文件名保持一致），弱网机器在官方源不可达时自动回退到该镜像；所有镜像文件仍执行相同 SHA256 校验。不上传镜像不影响正常功能。
 
 ## 注意事项
 

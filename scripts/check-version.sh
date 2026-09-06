@@ -13,11 +13,17 @@ fail() {
 version_file="$(sed 's/^v//' VERSION | tr -d '\r\n')"
 version_sb="$(grep -m1 '^SCRIPT_VERSION=' sb.sh | cut -d'"' -f2)"
 version_install="$(grep -m1 '^PROJECT_VERSION=' install.sh | sed 's/.*v//; s/"$//' | tr -d '\r\n')"
-version_iface="$(grep -o 'releases/download/v[0-9.]*' interface/index.html | head -n 1 | sed 's|releases/download/v||')"
 
 [ "${version_file}" = "${version_sb}" ] || fail "VERSION(${version_file}) 与 sb.sh SCRIPT_VERSION(${version_sb}) 不一致"
 [ "${version_file}" = "${version_install}" ] || fail "VERSION(${version_file}) 与 install.sh PROJECT_VERSION(${version_install}) 不一致"
-[ "${version_file}" = "${version_iface}" ] || fail "VERSION(${version_file}) 与 interface RELEASE_BASE(${version_iface}) 不一致"
+
+# README / interface 的安装入口必须指向 releases/latest，不得钉死版本号，
+# 防止用户照文档装到旧版（v0.2.11 事故）
+if grep -qE 'releases/download/v[0-9]+\.[0-9]+\.[0-9]+' README.md; then
+  fail "README.md 出现钉死版本号的下载链接，请改用 releases/latest/download/"
+fi
+grep -q 'releases/latest/download/install.sh' interface/index.html ||
+  fail "interface RELEASE_BASE 应指向 releases/latest/download/install.sh"
 
 bash scripts/build-release-bundle.sh >/dev/null
 bundle_name="singbox-manager-v${version_file}.tar.gz"
