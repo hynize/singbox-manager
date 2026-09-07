@@ -224,7 +224,7 @@ mkdir -p "${STUB_BIN}"
 cat >"${STUB_BIN}/sing-box" <<'EOF'
 #!/usr/bin/env bash
 case "${1:-}" in
-version) echo "sing-box version 1.13.16" ;;
+version) echo "sing-box version 1.14.0" ;;
 check) exit 0 ;;
 run) sleep 300 ;;
 generate)
