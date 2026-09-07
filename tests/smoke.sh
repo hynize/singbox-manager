@@ -206,7 +206,14 @@ assert_eval_true "compute_go_mem_limit_mb 输出正整数" 'v="$(compute_go_mem_
 assert_eval_true "compute_go_mem_limit_mb 不低于下限" 'v="$(SBM_GOMEM_FLOOR_MB=9999 compute_go_mem_limit_mb)"; [ "${v}" = "9999" ]'
 assert_eval_true "go_mem_limit_value 带 MiB 后缀" 'v="$(go_mem_limit_value)"; [ -z "${v}" ] || [[ "${v}" =~ ^[0-9]+MiB$ ]]'
 assert_eval_true "argo_domain_resolvable 公网域名可解析" 'argo_domain_resolvable cloudflare.com'
-assert_eval_false "argo_domain_resolvable 无效域名拒绝" 'argo_domain_resolvable "nonexistent-sbm-test.invalid"'
+# 拒绝性断言仅在 DoH 可达环境执行：双源均不可达时函数按设计 fail-open 放行
+if curl -fsS --max-time 5 -H 'accept: application/dns-json' "https://1.1.1.1/dns-query?name=cloudflare.com.&type=A" >/dev/null 2>&1; then
+  assert_eval_false "argo_domain_resolvable 无效域名拒绝" 'argo_domain_resolvable "nonexistent-sbm-test.invalid"'
+else
+  PASS=$((PASS + 1))
+  printf 'SKIP (DoH 不可达，fail-open 路径): argo_domain_resolvable 无效域名拒绝
+' >&2
+fi
 assert_eval_false "download_file_multi 全部源失败返回非零" 'download_file_multi "${TEST_ROOT}/dl.out" "https://sbm.invalid/nonexist-a" "https://sbm.invalid/nonexist-b"'
 
 # --- CLI 用法输出 ---

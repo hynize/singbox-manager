@@ -673,11 +673,29 @@ argo_domain_resolvable() {
     fi
   fi
 
-  # 本地解析不可用或未命中：查 Cloudflare DoH 公共记录（绕开本机负缓存）
+  # 本地解析不可用或未命中：查公共 DoH 记录（1.1.1.1 / dns.google 双源，绕开本机负缓存）。
+  # 语义区分：
+  #   DoH 应答"无记录"（确认未发布）           -> 返回失败，调用方重试
+  #   DoH 网络不可达（无法核验，如墙内环境）   -> fail-open 放行并告警，
+  #     因为 cloudflared 日志已出现域名即代表边缘注册成功，此时拒绝会让
+  #     弱网机器的临时隧道永远写不进域名（v0.2.19 前的故障面）
   if command_exists curl && command_exists jq; then
-    if [ "$(curl -fsS --max-time 8 -H 'accept: application/dns-json' "https://1.1.1.1/dns-query?name=${domain}.&type=A" 2>/dev/null | jq -r '[.Answer[]? | select(.type == 1)] | length' 2>/dev/null || printf 0)" -gt 0 ]; then
+    local doh_verified=0 answered=0 records source
+    for source in "https://1.1.1.1/dns-query?name=${domain}.&type=A" "https://dns.google/resolve?name=${domain}.&type=A"; do
+      records="$(curl -fsS --max-time 6 -H 'accept: application/dns-json' "${source}" 2>/dev/null | jq -r '[.Answer[]? | select(.type == 1)] | length' 2>/dev/null || true)"
+      [ -n "${records}" ] || continue
+      doh_verified=1
+      if [ "${records}" -gt 0 ]; then
+        return 0
+      fi
+      answered=1
+      break
+    done
+    if [ "${doh_verified}" = 0 ]; then
+      print_warn "公共 DoH 均不可达，无法核验 ${domain} 的 DNS 发布，按隧道注册结果放行。"
       return 0
     fi
+    [ "${answered}" = 1 ] && return 1
   fi
 
   return 1

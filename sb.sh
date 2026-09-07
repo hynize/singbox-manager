@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.18"
+SCRIPT_VERSION="0.2.19"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -1132,8 +1132,12 @@ start_argo_node() {
   : >"${log_file}"
   chmod 600 "${log_file}"
 
-  # 启动前清空旧域名：隧道失败时分享链接不再显示失效地址
-  json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
+  # token 模式的 endpoint_domain 是安装时提供的不变值：不得清空，
+  # 否则每次服务重启后固定隧道链接会显示"尚未分配"（v0.2.18 回归）
+  if [ "${mode}" != "token" ]; then
+    # 启动前清空旧域名：临时隧道失败时分享链接不再显示失效地址
+    json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
+  fi
 
   edge_ip="$(argo_edge_ip_version)"
 
