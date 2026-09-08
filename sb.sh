@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.22"
+SCRIPT_VERSION="0.2.23"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 

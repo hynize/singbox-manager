@@ -1039,7 +1039,14 @@ build_share_link() {
         "$(url_encode "$host_domain")" "$(url_encode "$host_domain")" "$(url_encode "$ws_path")"
     fi
     if [ "$cert_mode" = "self-signed" ]; then
-      printf '&allowInsecure=1'
+      # 自签证书固定指纹（新版 Xray/v2rayN 已拒绝 allowInsecure，改用 pinnedPeerCertSha256）；
+      # 无证书文件（旧节点）时回退 allowInsecure=1
+      fp="$(cert_fingerprint "$(node_value "$tag" "certificate_path")" 2>/dev/null || true)"
+      if [ -n "${fp}" ]; then
+        printf '&pcs=%s' "${fp}"
+      else
+        printf '&allowInsecure=1'
+      fi
     fi
     printf '#%s' "$(url_encode "$name")"
     ;;

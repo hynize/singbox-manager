@@ -159,7 +159,13 @@ json_set_record "${NODES_FILE}" "nws-direct" '{"protocol":"vless-ws-tls","name":
 json_set_record "${SECRETS_FILE}" "nws-direct" '{"uuid":"uwsd"}'
 assert_eval_true "WS 直连 authority 用服务器 IP" 'build_share_link nws-direct | grep -q "@203.0.113.10:20835"'
 assert_eval_true "WS 直连 sni/host 用 WS Host 域名" 'build_share_link nws-direct | grep -q "sni=ws.example.com&type=ws&host=ws.example.com"'
-assert_eval_true "WS 自签链接含 allowInsecure=1" 'build_share_link nws-direct | grep -q "allowInsecure=1"'
+assert_eval_true "WS 直连自签无证书时回退 allowInsecure=1" 'build_share_link nws-direct | grep -q "allowInsecure=1"'
+json_set_record "${NODES_FILE}" "nws-pin" '{"protocol":"vless-ws-tls","name":"WS-Pin","port":20835,"host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"self-signed","ws_mode":"direct"}'
+json_set_record "${SECRETS_FILE}" "nws-pin" '{"uuid":"uwsp"}'
+ws_pin_pair="$(ensure_tls_material tag_wspin ws.example.com)"
+json_set_field "${NODES_FILE}" "nws-pin" "certificate_path" "${ws_pin_pair%|*}"
+assert_eval_true "WS 自签有证书时输出 pcs=pinnedPeerCertSha256" 'build_share_link nws-pin | grep -q "pcs=[0-9a-f]\{64\}"'
+assert_eval_false "WS pcs 链接不再含 allowInsecure" 'build_share_link nws-pin | grep -q "allowInsecure=1"'
 json_set_record "${NODES_FILE}" "nws-cdn" '{"protocol":"vless-ws-tls","name":"WS-CDN","port":20835,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"custom","ws_mode":"cdn","cdn_port":8443}'
 json_set_record "${SECRETS_FILE}" "nws-cdn" '{"uuid":"uwsc"}'
 assert_eval_true "WS CDN authority 用优选域名+CDN 端口" 'build_share_link nws-cdn | grep -q "@cdn.example.com:8443"'
