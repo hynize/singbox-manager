@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.21"
+SCRIPT_VERSION="0.2.22"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -1691,13 +1691,26 @@ auto_add_vless_reality() {
 
 auto_add_vless_ws_tls() {
   local port="$1"
-  local tag name uuid preferred_domain host_domain ws_path cert_bundle cert_mode cert_file key_file node_json secret_json
+  local tag name uuid preferred_domain host_domain ws_path cert_bundle cert_mode cert_file key_file node_json secret_json ws_mode cdn_port
   tag="$(generate_tag "vless-ws-tls")"
   if [ -n "${ENV_NAME}" ]; then name="${ENV_NAME}-WS-TLS"; else name="VLESS-WS-TLS"; fi
   uuid="${ENV_UUID:-$(generate_uuid)}"
   preferred_domain="${ENV_CDN_HOST:-${DEFAULT_CDN_DOMAIN}}"
   host_domain="${ENV_WS_HOST:-${DEFAULT_TLS_SERVER}}"
   ws_path="${ENV_WS_PATH:-$(random_ws_path)}"
+  ws_mode="${ENV_WS_MODE:-direct}"
+  cdn_port="${ENV_CDN_PORT:-443}"
+  case "${ws_mode}" in
+  direct | cdn) ;;
+  *)
+    print_warn "ws_mode=${ws_mode} 非法，回退 direct（可选值：direct|c_dn）。"
+    ws_mode="direct"
+    ;;
+  esac
+  if [[ ! "${cdn_port}" =~ ^[0-9]+$ ]] || [ "${cdn_port}" -lt 1 ] || [ "${cdn_port}" -gt 65535 ]; then
+    print_warn "cdn_port=${cdn_port} 非法，回退 443。"
+    cdn_port=443
+  fi
   cert_bundle="$(auto_cert_bundle "$tag" "$host_domain")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1711,6 +1724,8 @@ auto_add_vless_ws_tls() {
     --arg preferred_domain "$preferred_domain" \
     --arg host_domain "$host_domain" \
     --arg ws_path "$ws_path" \
+    --arg ws_mode "$ws_mode" \
+    --argjson cdn_port "$cdn_port" \
     --arg certificate_mode "$cert_mode" \
     --arg certificate_path "$cert_file" \
     --arg key_path "$key_file" '{
@@ -1720,6 +1735,8 @@ auto_add_vless_ws_tls() {
       preferred_domain: $preferred_domain,
       host_domain: $host_domain,
       ws_path: $ws_path,
+      ws_mode: $ws_mode,
+      cdn_port: $cdn_port,
       certificate_mode: $certificate_mode,
       certificate_path: $certificate_path,
       key_path: $key_path
@@ -2054,10 +2071,12 @@ auto_install() {
   ENV_HY_SNI="$(env_domain_or_default "hy_sni" "${DEFAULT_TLS_SERVER}")"
   ENV_WS_HOST="$(env_domain_or_default "ws_host" "${DEFAULT_TLS_SERVER}")"
   ENV_WS_PATH="$(env_var "ws_path")"
+  ENV_WS_MODE="$(env_var "ws_mode")"
+  ENV_CDN_PORT="$(env_var "cdn_port")"
   ENV_CDN_HOST="$(env_domain_or_default "cdn_host" "${DEFAULT_CDN_DOMAIN}")"
-  # 默认优选域名仅在前置 CDN 已接入本机时可用；一键安装不中断，但必须让用户看见
-  if [ "${ENV_CDN_HOST}" = "${DEFAULT_CDN_DOMAIN}" ] && [ "${confirm_default_cdn:-}" != "1" ]; then
-    print_warn "⚠️ 未设置有效 cdn_host：WS 类节点将使用内置优选域名 ${DEFAULT_CDN_DOMAIN}（仅该域名已接入本机前置 CDN 时可达）。"
+  # 默认优选域名仅在 ws_mode=cdn（CDN 中转）时要求本机已接入前置 CDN；直连模式（默认）不依赖 cdn_host
+  if [ "${ENV_CDN_HOST}" = "${DEFAULT_CDN_DOMAIN}" ] && [ "${ENV_WS_MODE:-direct}" = "cdn" ] && [ "${confirm_default_cdn:-}" != "1" ]; then
+    print_warn "⚠️ 未设置有效 cdn_host：WS-TLS(CDN 中转) 节点将使用内置优选域名 ${DEFAULT_CDN_DOMAIN}（仅该域名已接入本机前置 CDN 时可达）。"
     print_warn "   请改用 cdn_host=你的优选域名或IP 重新执行；确认使用默认值可加 confirm_default_cdn=1 消除本提示。"
   fi
   ENV_SOCKS5_USER="$(env_var "socks5_username")"

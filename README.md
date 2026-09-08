@@ -25,7 +25,9 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `vlrt` `wspt` `tupt` `anypt` `hypt` `socks5pt` | 各协议端口，填了即启用 | 不启用 |
 | `argo=vlpt` `argo_pt` | 启用 VLESS-Argo；本地端口 | 8001 |
 | `agn` `agk` | Argo 固定隧道域名 + Token（临时隧道留空） | 临时隧道 |
-| `cdn_host` | WS 类节点连接地址（优选 IP/域名）。**内置默认仅在前置 CDN 已接入本机时可用**，请填自己的域名或优选 IP | `saas.sin.fan` |
+| `cdn_host` | CDN 中转地址（优选 IP/域名），仅在 WS-TLS 选择 `ws_mode=cdn` 时使用 | `saas.sin.fan` |
+| `ws_mode` | WS-TLS 连接方式：`direct` 直连服务器 IP（推荐）或 `cdn` 走 `cdn_host` 中转 | `direct` |
+| `cdn_port` | WS-TLS `cdn` 模式使用的 CDN 转发端口（如 443/8443/2053/2096） | `443` |
 | `confirm_default_cdn=1` | 确知并接受默认优选域名时消除对应警告 | 未设置 |
 | `uuid` | VLESS/TUIC 共用 UUID | 自动生成 |
 | `passwd` | AnyTLS/HY2/TUIC 密码 | 自动生成 |

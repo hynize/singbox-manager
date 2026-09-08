@@ -995,7 +995,7 @@ build_share_link() {
   local tag="$1"
   local public_ip="${2:-}"
   local protocol name port host uuid password username fp
-  local reality_server public_key short_id ws_path preferred_domain endpoint_domain host_domain tls_server cert_mode
+  local reality_server public_key short_id ws_path preferred_domain endpoint_domain host_domain tls_server cert_mode ws_mode cdn_port ext
 
   protocol="$(node_value "$tag" "protocol")"
   name="$(node_value "$tag" "name")"
@@ -1020,12 +1020,24 @@ build_share_link() {
     preferred_domain="$(node_value "$tag" "preferred_domain")"
     host_domain="$(node_value "$tag" "host_domain")"
     cert_mode="$(node_value "$tag" "certificate_mode")"
-    if [ -z "${preferred_domain}" ] || [ "${preferred_domain}" = "${DEFAULT_CDN_DOMAIN}" ]; then
-      print_warn "WS-TLS 节点 ${tag} 使用默认优选域名 ${DEFAULT_CDN_DOMAIN}：仅当该域名已接入本机前置 CDN 时可用，否则请把 cdn_host 设为你自己的域名。"
+    ws_mode="$(node_value "$tag" "ws_mode")"
+    cdn_port="$(node_value "$tag" "cdn_port")"
+    ws_mode="${ws_mode:-direct}"
+    cdn_port="${cdn_port:-443}"
+    if [ "${ws_mode}" = "cdn" ]; then
+      # CDN 中转模式：客户端连 cdn_host:cdn_port，SNI/Host 走优选域名，由前置 CDN 回源到本机。
+      if [ -z "${preferred_domain}" ] || [ "${preferred_domain}" = "${DEFAULT_CDN_DOMAIN}" ]; then
+        print_warn "WS-TLS 节点 ${tag} 使用默认优选域名 ${DEFAULT_CDN_DOMAIN}：仅当该域名已接入本机前置 CDN 时可用，否则请把 cdn_host 设为你自己的域名或改用 ws_mode=direct 直连。"
+      fi
+      printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
+        "$uuid" "$(wrap_host "$preferred_domain")" "$cdn_port" \
+        "$(url_encode "$preferred_domain")" "$(url_encode "$preferred_domain")" "$(url_encode "$ws_path")"
+    else
+      # 直连模式：客户端连服务器 IP + wspt，SNI/Host 走 WS Host 域名（自签证书跳过校验）
+      printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
+        "$uuid" "$host" "$port" \
+        "$(url_encode "$host_domain")" "$(url_encode "$host_domain")" "$(url_encode "$ws_path")"
     fi
-    printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
-      "$uuid" "$(wrap_host "$preferred_domain")" "$port" \
-      "$(url_encode "$host_domain")" "$(url_encode "$host_domain")" "$(url_encode "$ws_path")"
     if [ "$cert_mode" = "self-signed" ]; then
       printf '&allowInsecure=1'
     fi
@@ -1035,11 +1047,14 @@ build_share_link() {
     password="$(secret_value "$tag" "password")"
     tls_server="$(url_encode "$(node_value "$tag" "tls_server")")"
     cert_mode="$(node_value "$tag" "certificate_mode")"
-    printf 'anytls://%s@%s:%s?security=tls&sni=%s' \
-      "$(url_encode "$password")" "$host" "$port" "$tls_server"
+    # 自签证书：insecure=1 跳过校验；type/headerType 声明 TCP 传输，兼容主流客户端解析
     if [ "$cert_mode" = "self-signed" ]; then
-      printf '&allowInsecure=1'
+      ext="insecure=1&"
+    else
+      ext=""
     fi
+    printf 'anytls://%s@%s:%s?%ssecurity=tls&sni=%s&type=tcp&headerType=none' \
+      "$(url_encode "$password")" "$host" "$port" "$ext" "$tls_server"
     printf '#%s' "$(url_encode "$name")"
     ;;
   vless-argo)

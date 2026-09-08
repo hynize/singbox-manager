@@ -318,6 +318,19 @@
           <label>WebSocket 路径 <span class="pill">ws_path</span></label>
           <input type="text" id="ws_path" placeholder="留空自动生成随机路径（Argo/WS 共用）">
         </div>
+        <div class="row">
+          <label>WS-TLS 连接方式 <span class="pill">ws_mode</span></label>
+          <div class="ctl">
+            <select id="ws_mode">
+              <option value="direct">direct · 直连（服务器 IP + wspt，推荐）</option>
+              <option value="cdn">cdn · CDN 中转（域名 + CDN 端口）</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <label>CDN 转发端口 <span class="pill">cdn_port</span></label>
+          <input type="text" id="cdn_port" placeholder="443（仅 ws_mode=cdn 生效，如 8443/2053/2096）" inputmode="numeric">
+        </div>
         <div class="sep"></div>
         <div class="row">
           <label>TUIC SNI <span class="pill">tu_sni</span></label>
@@ -537,6 +550,11 @@
     strEnv('vl_sni', 'vl_sni', envs);
     strEnv('ws_host', 'ws_host', envs);
     strEnv('ws_path', 'ws_path', envs);
+    // WS-TLS 连接方式仅在启用 wspt 时下发
+    if (val('wspt')) {
+      strEnv('ws_mode', 'ws_mode', envs);
+      strEnv('cdn_port', 'cdn_port', envs);
+    }
     strEnv('cdn_host', 'cdn_host', envs);
     strEnv('tu_sni', 'tu_sni', envs);
     strEnv('any_sni', 'any_sni', envs);
@@ -575,10 +593,13 @@
     $id('dl').disabled = form === 'sbm';
     $id('install-src').disabled = form === 'sbm';
   }
+  function syncWsMode() {
+    $id('cdn_port').disabled = val('ws_mode') !== 'cdn';
+  }
 
   /* ---------------- 事件绑定 ---------------- */
   document.addEventListener('input', function () { regen(); });
-  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); regen(); });
+  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); syncWsMode(); regen(); });
 
   $id('gen-uuid').addEventListener('click', function () { $id('uuid').value = genUuid(); regen(); });
   $id('gen-passwd').addEventListener('click', function () { $id('passwd').value = genPassword(); regen(); });
@@ -665,7 +686,7 @@
     regen();
   });
 
-  syncArgo(); syncCert(); syncForm();
+  syncArgo(); syncCert(); syncForm(); syncWsMode();
   regen();
 })();
 </script>

@@ -144,16 +144,37 @@ assert_eval_false "is_safe_domain 含 &" 'is_safe_domain "a&b.com"'
 assert_eval_false "is_safe_domain 空值" 'is_safe_domain ""'
 
 # --- IPv6 authority 生成（审查 F-05）：必须先 wrap_host 加括号、再编码 query 字段 ---
-json_set_record "${NODES_FILE}" "n6ws" '{"protocol":"vless-ws-tls","name":"IPv6WS","port":443,"preferred_domain":"2001:db8::1","host_domain":"t.example.com","ws_path":"/p","certificate_mode":"custom"}'
+json_set_record "${NODES_FILE}" "n6ws" '{"protocol":"vless-ws-tls","name":"IPv6WS","port":443,"preferred_domain":"2001:db8::1","host_domain":"t.example.com","ws_path":"/p","certificate_mode":"custom","ws_mode":"cdn"}'
 json_set_record "${SECRETS_FILE}" "n6ws" '{"uuid":"u6ws"}'
-assert_eval_true "IPv6 WS authority 加括号（不被 url_encode）" 'build_share_link n6ws | grep -q "@\[2001:db8::1\]:443"'
-assert_eval_false "IPv6 WS authority 不做 %5B 编码" 'build_share_link n6ws | grep -q "%5B2001"'
+assert_eval_true "IPv6 WS(CDN) authority 加括号（不被 url_encode）" 'build_share_link n6ws | grep -q "@\[2001:db8::1\]:443"'
+assert_eval_false "IPv6 WS(CDN) authority 不做 %5B 编码" 'build_share_link n6ws | grep -q "%5B2001"'
 json_set_record "${NODES_FILE}" "n6a" '{"protocol":"vless-argo","name":"A6","port":443,"preferred_domain":"2001:db8::99","ws_path":"/w","endpoint_domain":"demo.trycloudflare.com"}'
 json_set_record "${SECRETS_FILE}" "n6a" '{"uuid":"u6a"}'
 assert_eval_true "IPv6 Argo authority 加括号" 'build_share_link n6a | grep -q "@\[2001:db8::99\]:443"'
-json_set_record "${NODES_FILE}" "n6d" '{"protocol":"vless-ws-tls","name":"Domain","port":443,"preferred_domain":"cdn.example.com","host_domain":"h.example.com","ws_path":"/p","certificate_mode":"custom"}'
+json_set_record "${NODES_FILE}" "n6d" '{"protocol":"vless-ws-tls","name":"Domain","port":443,"preferred_domain":"cdn.example.com","host_domain":"h.example.com","ws_path":"/p","certificate_mode":"custom","ws_mode":"cdn"}'
 json_set_record "${SECRETS_FILE}" "n6d" '{"uuid":"u6d"}'
-assert_eval_true "域名 WS authority 不受影响" 'build_share_link n6d | grep -q "@cdn.example.com:443"'
+assert_eval_true "域名 WS(CDN) authority 不受影响" 'build_share_link n6d | grep -q "@cdn.example.com:443"'
+# WS-TLS 直连与 CDN 中转双模式（v0.2.22）：
+json_set_record "${NODES_FILE}" "nws-direct" '{"protocol":"vless-ws-tls","name":"WS-Direct","port":20835,"host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"self-signed","ws_mode":"direct"}'
+json_set_record "${SECRETS_FILE}" "nws-direct" '{"uuid":"uwsd"}'
+assert_eval_true "WS 直连 authority 用服务器 IP" 'build_share_link nws-direct | grep -q "@203.0.113.10:20835"'
+assert_eval_true "WS 直连 sni/host 用 WS Host 域名" 'build_share_link nws-direct | grep -q "sni=ws.example.com&type=ws&host=ws.example.com"'
+assert_eval_true "WS 自签链接含 allowInsecure=1" 'build_share_link nws-direct | grep -q "allowInsecure=1"'
+json_set_record "${NODES_FILE}" "nws-cdn" '{"protocol":"vless-ws-tls","name":"WS-CDN","port":20835,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"custom","ws_mode":"cdn","cdn_port":8443}'
+json_set_record "${SECRETS_FILE}" "nws-cdn" '{"uuid":"uwsc"}'
+assert_eval_true "WS CDN authority 用优选域名+CDN 端口" 'build_share_link nws-cdn | grep -q "@cdn.example.com:8443"'
+assert_eval_true "WS CDN sni/host 用优选域名" 'build_share_link nws-cdn | grep -q "sni=cdn.example.com&type=ws&host=cdn.example.com"'
+# AnyTLS 链接格式（v0.2.22）：insecure=1 + type=tcp&headerType=none
+json_set_record "${NODES_FILE}" "nanytls" '{"protocol":"anytls","name":"AnyTLS","port":20834,"tls_server":"dl.google.com","certificate_mode":"self-signed"}'
+json_set_record "${SECRETS_FILE}" "nanytls" '{"password":"pwany"}'
+assert_eval_true "AnyTLS 自签链接含 insecure=1" 'build_share_link nanytls | grep -q "insecure=1"'
+assert_eval_true "AnyTLS 链接含 type=tcp&headerType=none" 'build_share_link nanytls | grep -q "type=tcp&headerType=none"'
+assert_eval_false "AnyTLS 自签链接不再含 allowInsecure" 'build_share_link nanytls | grep -q "allowInsecure"'
+json_set_record "${NODES_FILE}" "nanytls-custom" '{"protocol":"anytls","name":"AnyTLS-C","port":20834,"tls_server":"trust.example.com","certificate_mode":"custom"}'
+json_set_record "${SECRETS_FILE}" "nanytls-custom" '{"password":"pwanyb"}'
+assert_eval_false "AnyTLS 受信证书链接不含 insecure" 'build_share_link nanytls-custom | grep -q "insecure"'
+assert_eval_true "AnyTLS 受信证书链接保留 type=tcp" 'build_share_link nanytls-custom | grep -q "type=tcp&headerType=none"'
+assert_eval_true "anytls 自签 ext 不泄漏到全局" 'unset ext; build_share_link nanytls >/dev/null; [ -z "${ext:-}" ]'
 
 # --- fp 局部变量隔离（Bug #5）：hy2 自签时 fp 不得泄漏到全局 ---
 assert_eval_true "hy2 fp 不泄漏到全局" 'unset fp; build_share_link n2b >/dev/null; [ -z "${fp:-}" ]'
@@ -257,6 +278,10 @@ assert_eval_false "download_file_multi 全部源失败返回非零" 'download_fi
 
 # --- CLI 用法输出 ---
 assert_eval_true "print_cli_usage 可执行" 'print_cli_usage | grep -q "用法"'
+
+# --- auto_add_vless_ws_tls 记录 ws_mode/cdn_port（v0.2.22） ---
+ENV_NAME=Sm ENV_UUID=22222222-3333-4444-5555-666666666666 ENV_CDN_HOST=cdn.example.com ENV_WS_HOST=ws.example.com ENV_WS_MODE=cdn ENV_CDN_PORT=8443 auto_add_vless_ws_tls 20837
+assert_eval_true "ws_mode=cdn 与 cdn_port 写入节点记录" 'jq -e "to_entries[] | select(.value.protocol == \"vless-ws-tls\" and .value.port == 20837 and .value.ws_mode == \"cdn\" and .value.cdn_port == 8443)" "${NODES_FILE}" >/dev/null'
 
 # --- 端到端前置：清空状态 ---
 wipe_records
