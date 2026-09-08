@@ -167,6 +167,22 @@ rm -f "${RUNTIME_DIR}/bad.pid" "${RUNTIME_DIR}/ws.pid"
 
 # --- PID→二进制身份校验（审查 F-01）：错误二进制不得判为存活的服务实例 ---
 assert_eval_false "pid_matches_binary_or_alive 拒绝身份不符进程" 'pid_matches_binary_or_alive $$ /nonexistent/sbm-other-binary'
+# 回归：in-place 升级后旧进程 /proc/PID/exe 带 " (deleted)" 后缀仍应判定为"我们的实例"
+# （否则 kill_pid_file 会跳过终止，导致旧进程残留与新实例并存）。
+if [ -d /proc ] && command -v sleep >/dev/null 2>&1; then
+  _pb="${TEST_ROOT}/.pidbin"
+  cp /bin/sleep "${_pb}" 2>/dev/null || cp "$(dirname "$(command -v sleep)")/sleep" "${_pb}"
+  chmod +x "${_pb}"
+  "${_pb}" 30 & _pb_pid=$!
+  sleep 0.2
+  rm -f "${_pb}"
+  # MSYS 下 /proc/PID/exe 与 Windows 风格路径无法对等模拟原地替换，仅 Linux 上断言 (deleted)
+  if [[ "$(readlink "/proc/${_pb_pid}/exe" 2>/dev/null || true)" == *" (deleted)"* ]]; then
+    assert_eval_true "pid_matches_binary 命中原地替换后的 (deleted) exe（兼容升级）" 'pid_matches_binary "'"${_pb_pid}"'" "'"${_pb}"'"'
+    assert_eval_true "pid_matches_binary_or_alive 对 (deleted) exe 判为存活（兼容升级）" 'pid_matches_binary_or_alive "'"${_pb_pid}"'" "'"${_pb}"'"'
+  fi
+  kill "${_pb_pid}" 2>/dev/null || true
+fi
 
 # --- 自签证书与回退逻辑 ---
 assert_eval_true "ensure_tls_material 生成证书" 'pair="$(ensure_tls_material tag_tls www.bing.com)"; [ -f "${pair%|*}" ] && [ -f "${pair#*|}" ]'

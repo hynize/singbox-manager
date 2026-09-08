@@ -856,7 +856,11 @@ read_pid_file() {
   printf '%s' "${content}"
 }
 
-# 校验 PID 是否仍指向预期二进制，防止进程死亡后 PID 被复用而误杀无关进程
+# 校验 PID 是否仍指向预期二进制，防止进程死亡后 PID 被复用而误杀无关进程。
+# 兼容 in-place 升级：二进制被替换（rm 后重写同一路径）且旧进程仍在运行时，
+# /proc/PID/exe 会解析为 "<path> (deleted)".此时该进程仍是"我们之前启动的实例"，
+# 若因末尾多了" (deleted)"就拒绝杀掉，会导致旧进程残留、与重启后的新实例并存
+# （同端口/同隧道域名冲突）。因此路径相等或"路径 + ' (deleted)'"均视为命中。
 pid_matches_binary() {
   local pid="$1"
   local binary="$2"
@@ -864,7 +868,7 @@ pid_matches_binary() {
   local exe=""
   exe="$(readlink -f "/proc/${pid}/exe" 2>/dev/null || true)"
   [ -n "${exe}" ] || return 1
-  [ "${exe}" = "${binary}" ]
+  [ "${exe}" = "${binary}" ] || [ "${exe}" = "${binary} (deleted)" ]
 }
 
 # 判断 PID 是否仍是"我们启动的实例"：存活且（/proc 可用时）指向预期二进制。
