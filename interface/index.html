@@ -295,7 +295,7 @@
             <select class="pick cdn-pick" data-target="cdn_host"><option value="">选择…</option></select>
           </div>
         </div>
-        <p class="note">Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。</p>
+        <p class="note">Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。cloudflared 安装遵循强校验：拿不到官方 SHA256 校验值时默认拒绝安装，绝不以版本自报代替完整性校验。</p>
       </section>
 
       <section class="card">
@@ -362,8 +362,8 @@
         <div class="row">
           <label>安装源（仅安装脚本形式）</label>
           <select id="install-src">
-            <option value="release">GitHub Release（推荐，带校验）</option>
-            <option value="raw">raw.githubusercontent.com/main</option>
+            <option value="release">GitHub Release（推荐，经 SHA256 强校验）</option>
+            <option value="raw">raw.githubusercontent.com/main（开发者选项 · 不经 Release 强校验）</option>
           </select>
         </div>
         <p class="note">rep 会先清空已有节点再重建，适合首次部署或重置配置；ins 保留已有节点，适合追加协议。两个动作都会自动安装/更新 sing-box 内核。</p>

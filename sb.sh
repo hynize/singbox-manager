@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.19"
+SCRIPT_VERSION="0.2.20"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -68,6 +68,18 @@ detect_systemd() {
   elif command_exists rc-service && [ -x /sbin/openrc-run ]; then
     has_openrc=true
   fi
+}
+
+# 守护 timer 是否真正处于"等待下一次触发"的调度态。
+# 不能用 `systemctl is-active` 判定 timer：timer 单元只要被 load 就显示 active，
+# 无法区分"已 enable 且等待"与"已 disable/无法触发"。改为查 list-timers 的
+# NEXT 列：非 n/a（已有下一次触发计划）才算生效。
+systemd_timer_active() {
+  local line
+  line="$(systemctl list-timers --all --no-legend "${WATCHDOG_TIMER_NAME}" 2>/dev/null | head -n 1 || true)"
+  [ -n "${line}" ] || return 1
+  [[ "${line}" == n/a* ]] && return 1
+  return 0
 }
 
 normalize_input() {
@@ -370,6 +382,11 @@ install_cloudflared_bin() {
 
   # 校验模式：sha256=官方 digest 完整校验；runtime=digest 不可得时降级为
   # "来源仍为官方 Release + 下载后实测版本一致 + 可执行校验"；固定版本表始终完整校验
+  #
+  # 供应链安全（对齐 sing-box 的强校验模型）：除非用户显式开启 runtime 校验
+  # 降级（CLOUDFLARED_ALLOW_RUNTIME_VERIFY=1），否则在拿不到可信 digest 时
+  # **fail-closed 拒绝安装**——运行时可执行 + 自报版本一致不能证明二进制内容
+  # 来自 Cloudflare/官方源（镜像源被污染时仍可通过）。
   verify_mode="sha256"
   version="${CLOUDFLARED_VERSION:-}"
   expected="${CLOUDFLARED_SHA256[$arch]:-}"
@@ -378,20 +395,31 @@ install_cloudflared_bin() {
     if version="$(cloudflared_latest_version)" && expected="$(cloudflared_latest_digest "${asset}")"; then
       print_info "cloudflared 官方最新版本：${version}"
     else
-      # 第二层：版本经 jsdelivr/固定表确定，digest 不可得时降级为运行时校验
+      # 第二层：版本经 jsdelivr/固定表确定。默认 fail-closed：
+      # 仅当解析出的版本恰好等于固定回退版本（可完整 SHA256 校验）时才继续。
       expected=""
       if [ -z "${version}" ]; then
         version="${CLOUDFLARED_FALLBACK_VERSION:-}"
       fi
       [ -n "${version}" ] || fatal "无法获取 cloudflared 最新版本，且未配置回退版本，拒绝继续安装。"
-      verify_mode="runtime"
       if [ -n "${CLOUDFLARED_SHA256[$arch]:-}" ] && [ "${version}" = "${CLOUDFLARED_FALLBACK_VERSION:-}" ]; then
         # 版本与固定回退版本一致时仍可用固定 digest 完整校验
         expected="${CLOUDFLARED_SHA256[$arch]}"
         verify_mode="sha256"
         print_warn "GitHub API 不可用，回退固定版本 cloudflared ${version}（完整 SHA256 校验）。"
+      elif [ "${CLOUDFLARED_ALLOW_RUNTIME_VERIFY:-0}" = "1" ]; then
+        # 显式允许 runtime 降级（默认关闭）：仍需保证固定表有该版本 digest 才可完整校验
+        if [ -n "${CLOUDFLARED_SHA256[$arch]:-}" ]; then
+          expected="${CLOUDFLARED_SHA256[$arch]}"
+          verify_mode="sha256"
+          print_warn "GitHub API 不可用，已用固定版本表 digest 完整校验 cloudflared ${version}。"
+        else
+          verify_mode="runtime"
+          print_warn "无法获取 cloudflared ${version} 的官方 digest，已按显式配置降级为运行时版本校验（来源仍为官方 Release）。"
+        fi
       else
-        print_warn "无法获取 cloudflared ${version} 的官方 digest，降级为运行时版本校验（来源仍为官方 Release）。"
+        rm -f "${tmpfile:-}"
+        fatal "无法获取 cloudflared ${version} 的可信 SHA256 digest，拒绝安装未校验的二进制。可设置 CLOUDFLARED_ALLOW_RUNTIME_VERIFY=1 显式接受更低校验强度。"
       fi
     fi
   else
@@ -585,7 +613,8 @@ service_state() {
 
   local pid
   pid="$(read_pid_file "${PID_FILE}" 2>/dev/null || true)"
-  if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
+  # 存活且确为 sing-box 实例才显示运行中，防止 PID 复用导致误报
+  if [ -n "${pid}" ] && pid_matches_binary_or_alive "${pid}" "${SINGBOX_BIN}"; then
     printf '运行中'
   else
     printf '已停止'
@@ -2006,6 +2035,10 @@ auto_install() {
     done < <(iter_node_tags)
     stop_service || true
     wipe_records
+    # 标记 rep 事务窗口：此后任何失败（render/check/start/证书迁移）都会触发
+    # handle_common_error 自动恢复该备份，禁止停留"旧节点消失、新配置未启动"状态（F-02）
+    # shellcheck disable=SC2034  # 在 lib/common.sh 的 ERR 陷阱中读取
+    _AUTO_ROLLBACK_DIR="${backup_dir}"
     print_info "已清空原有节点（备份：${backup_dir}），按环境变量重建。"
   else
     print_info "已备份现有状态：${backup_dir}"
@@ -2036,42 +2069,57 @@ auto_install() {
     vless-reality)
       if auto_try_port "$port" "VLESS-Reality"; then
         auto_add_vless_reality "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      else
+        failed=$((failed + 1))
       fi
       ;;
     vless-ws-tls)
       if auto_try_port "$port" "VLESS-WS-TLS"; then
         auto_add_vless_ws_tls "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      else
+        failed=$((failed + 1))
       fi
       ;;
     anytls)
       if auto_try_port "$port" "AnyTLS"; then
         auto_add_anytls "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      else
+        failed=$((failed + 1))
       fi
       ;;
     vless-argo)
       if auto_try_port "$port" "VLESS-Argo"; then
         auto_add_vless_argo "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      else
+        failed=$((failed + 1))
       fi
       ;;
     tuic-v5)
       if auto_try_port "$port" "TUIC-v5"; then
         auto_add_tuic_v5 "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      else
+        failed=$((failed + 1))
       fi
       ;;
     hy2)
       if auto_try_port "$port" "Hysteria2"; then
         auto_add_hy2 "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      else
+        failed=$((failed + 1))
       fi
       ;;
     socks5)
       if auto_try_port "$port" "SOCKS5"; then
         auto_add_socks5 "$port" && added=$((added + 1)) || failed=$((failed + 1))
+      else
+        failed=$((failed + 1))
       fi
       ;;
     esac
   done
 
   if [ "${added}" -eq 0 ]; then
+    _AUTO_ROLLBACK_DIR=""
     if [ "${action}" = "rep" ]; then
       restore_latest_backup || true
       reconcile_state || true
@@ -2090,6 +2138,8 @@ auto_install() {
   fi
   render_config
   start_service
+  # 事务已提交：清除回滚标记，此后失败不再触发整事务回滚
+  _AUTO_ROLLBACK_DIR=""
   # 隧道启动失败（如临时域名等待超时）不应判定整次安装失败
   restart_all_argo_nodes || print_warn "部分 Argo 隧道启动失败，稍后可用 sbm list 重查域名。"
   sanitize_permissions
@@ -2107,7 +2157,8 @@ auto_install() {
 
 print_node_list() {
   local idx=1
-  local tag protocol name port
+  local tag protocol name port public_ip
+  public_ip="$(get_public_ip)"
   while IFS= read -r tag; do
     [ -n "${tag}" ] || continue
     protocol="$(node_value "$tag" "protocol")"
@@ -2115,7 +2166,7 @@ print_node_list() {
     port="$(node_value "$tag" "port")"
     echo "${idx}. ${name} | ${protocol} | 端口: ${port}"
     echo "   标识: ${tag}"
-    echo "   链接: $(build_share_link "$tag")"
+    echo "   链接: $(build_share_link "$tag" "$public_ip")"
     idx=$((idx + 1))
   done < <(iter_node_tags)
 
@@ -2127,11 +2178,12 @@ print_node_list() {
 # 生成 base64 订阅内容（全部节点分享链接逐行 base64，输出到 stdout 或文件）
 sub_command() {
   local out_file="${1:-}"
-  local links="" tag content
+  local links="" tag content public_ip
   init_storage
+  public_ip="$(get_public_ip)"
   while IFS= read -r tag; do
     [ -n "${tag}" ] || continue
-    links+="$(build_share_link "${tag}")"$'\n'
+    links+="$(build_share_link "${tag}" "$public_ip")"$'\n'
   done < <(iter_node_tags)
   if [ -z "${links//[$'\n']/}" ]; then
     print_err "当前没有可输出的节点。"
@@ -2221,7 +2273,11 @@ show_status() {
   echo "服务状态：$(service_state)"
   echo "节点数量：${count}"
   if [ "${has_systemd}" = true ]; then
-    echo "守护定时器：$(systemctl is-active "${WATCHDOG_TIMER_NAME}" 2>/dev/null || echo 未知)"
+    if systemd_timer_active; then
+      echo "守护定时器：active (下次触发已调度)"
+    else
+      echo "守护定时器：inactive (未调度)"
+    fi
   elif [ "${has_openrc}" = true ]; then
     echo "守护方式：OpenRC + cron"
   else

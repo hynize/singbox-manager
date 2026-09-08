@@ -62,12 +62,13 @@ tests/smoke.sh               冒烟测试
 
 ## 说明
 
-- 稳健性：`rep`/`ins`/`delall` 前自动快照到 `backups/`（保留 10 份），`sbm restore` 一键回滚；watchdog 每轮自动对账清理孤儿记录；Argo 临时域名经公共 DNS（DoH）发布确认后才写入节点；Argo Token 经环境变量传递，不出现在进程命令行
-- 交付韧性：sing-box/cloudflared 多下载源回退（官方 → 本仓库镜像）；cloudflared 版本查询 GitHub API 不可用时回退 jsdelivr，digest 不可得时降级运行时版本校验，固定版本表始终完整 SHA256 校验
+- 稳健性：`rep`/`ins`/`delall` 前自动快照到 `backups/`（保留 10 份，目录含唯一后缀，且一并备份自签证书/私钥），`sbm restore` 一键回滚；`rep` 在"清空已有节点后"至"提交前"任一环节失败都会自动恢复到安装前状态；watchdog 每轮自动对账清理孤儿记录；Argo 临时域名经公共 DNS（DoH，A/AAAA 任一可解析即通过）发布确认后才写入节点；Argo Token 经环境变量传递，不出现在进程命令行
+- 进程识别：service/watchdog 的存活判断与清理全部做 PID→预期二进制的身份校验（`/proc` 可用时），PID 被复用不会导致漏重启或误杀；临时 Argo 隧道日志每次启动截断，避免旧进程残留域名被误解析
+- 交付韧性：sing-box 固定版本 + SHA256（官方 → 本仓库镜像多源回退）；cloudflared 强校验模型——拿不到官方 SHA256 时默认 **fail-closed 拒绝安装**，绝不静默以"版本自报"代替完整性校验；仅当显式设置 `CLOUDFLARED_ALLOW_RUNTIME_VERIFY=1` 才允许降级（弱网机器的明确选择，不推荐用于生产）
 - 低内存：sing-box/cloudflared 按物理内存与 cgroup 上限自动设置 `GOMEMLIMIT` 软上限（防 OOM）；cloudflared 默认 `http2` 模式压内存尖峰；低于 200MB 内存自动提示资源约束
 - 保活：systemd 环境用 service + timer；OpenRC/无 systemd 用 cron + pidfile，cloudflared 异常退出约 1 分钟内自动拉起
-- 安全：`set -eEuo pipefail`、`umask 077`、secrets/证书/pid 全部 600；sing-box 固定版本 + SHA256，cloudflared 跟随官方最新版并优先校验 digest
-- CI：shellcheck / bash -n / shfmt / 冒烟测试 / 可复现 bundle 构建
+- 安全：`set -eEuo pipefail`、`umask 077`、secrets/证书/pid 全部 600；分享链接 authority 对 IPv6 正确加方括号（不再先做查询参数编码）；`build_share_link` 局部变量隔离（`fp` 不泄漏到全局）
+- CI：shellcheck / bash -n / shfmt / 冒烟测试 / 可复现 bundle 构建 / 版本与 `worker.js` 一致性门禁
 - 上游版本见 `metadata/upstream.env`
 
 ## 发布流程

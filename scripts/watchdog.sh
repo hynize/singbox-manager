@@ -86,7 +86,8 @@ ensure_singbox() {
 
   local pid
   pid="$(read_pid_file "${PID_FILE}" 2>/dev/null || true)"
-  if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
+  # 存活且（/proc 可用时）确为 sing-box 实例才认为健康，防止 PID 复用导致漏重启
+  if [ -n "${pid}" ] && pid_matches_binary_or_alive "${pid}" "${SINGBOX_BIN}"; then
     return 0
   fi
 
@@ -101,10 +102,18 @@ start_temp_tunnel() {
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
-  : >>"${log_file}"
+  : >"${log_file}"
   chmod 600 "${log_file}"
-  # 启动前清空旧域名：隧道失败时分享链接不再显示失效地址
-  acquire_lock
+  # 截断（非追加）启动：日志只含本次进程内容，避免 parse_trycloudflare_domain
+  # 从上一轮已死的 cloudflared 进程残留中误取旧域名（stale domain）。
+  # 与 sb.sh start_argo_node 的 `: >` 语义一致。
+  # 启动前清空旧域名：隧道失败时分享链接不再显示失效地址。
+  # 用非阻塞 try_acquire_lock：watchdog 场景外层已释放锁，拿不到锁时
+  # 跳过本轮写（与 watchdog 兜底语义一致），绝不在此阻塞占用 watch 周期。
+  if ! try_acquire_lock; then
+    print_warn "无法获取锁，跳过 ${tag} 的临时 Argo 域名清理。"
+    return 1
+  fi
   json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
   release_lock
   edge_ip="$(argo_edge_ip_version)"
@@ -115,19 +124,26 @@ start_temp_tunnel() {
 
   # 域名需通过公共 DNS 发布确认（DoH）才写入节点，防止"看似成功实则不可解析"
   if domain="$(wait_for_trycloudflare_domain_verified "${log_file}" 60 1)"; then
-    acquire_lock
+    try_acquire_lock || {
+      kill_pid_file "${pid_file}" "${CLOUDFLARED_BIN}"
+      print_warn "写入 ${tag} 的临时 Argo 域名时无法获取锁，已保留隧道待下轮确认。"
+      return 1
+    }
     if jq -e --arg tag "$tag" 'has($tag)' "${NODES_FILE}" >/dev/null 2>&1; then
       if ! json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "${domain}"; then
-        kill_pid_file "${pid_file}"
+        kill_pid_file "${pid_file}" "${CLOUDFLARED_BIN}"
         print_warn "写入 ${tag} 的临时 Argo 域名失败。"
       fi
     else
-      kill_pid_file "${pid_file}"
+      kill_pid_file "${pid_file}" "${CLOUDFLARED_BIN}"
     fi
     release_lock
   else
-    kill_pid_file "${pid_file}"
-    acquire_lock
+    kill_pid_file "${pid_file}" "${CLOUDFLARED_BIN}"
+    try_acquire_lock || {
+      print_warn "等待 ${tag} 的临时 Argo 域名超时，且无法获取锁清除旧域名。"
+      return 1
+    }
     json_set_field "${NODES_FILE}" "${tag}" "endpoint_domain" "" 2>/dev/null || true
     release_lock
     print_warn "等待 ${tag} 的临时 Argo 域名超时（含 DNS 发布确认），已清除旧域名。"
@@ -145,7 +161,7 @@ start_token_tunnel() {
   pid_file="${RUNTIME_DIR}/${tag}.pid"
   log_file="${LOG_DIR}/${tag}.cloudflared.log"
 
-  : >>"${log_file}"
+  : >"${log_file}"
   chmod 600 "${log_file}"
   edge_ip="$(argo_edge_ip_version)"
   # token 经环境变量传入，避免明文出现在进程命令行（ps 可见）
@@ -166,7 +182,8 @@ ensure_argo_nodes() {
 
     pid_file="${RUNTIME_DIR}/${tag}.pid"
     pid="$(read_pid_file "${pid_file}" 2>/dev/null || true)"
-    if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
+    # 存活且（/proc 可用时）确为 cloudflared 实例才跳过重启，防止 PID 复用漏拉起
+    if [ -n "${pid}" ] && pid_matches_binary_or_alive "${pid}" "${CLOUDFLARED_BIN}"; then
       continue
     fi
 

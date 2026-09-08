@@ -86,6 +86,16 @@ handle_common_error() {
   local line_no="$2"
   local exit_code="$3"
   print_err "命令执行失败：${source_file}:${line_no}"
+  # 事务回滚（auto_install 的 rep 窗口）：已清空旧节点但尚未提交时，
+  # 失败必须恢复备份，避免停留"旧节点消失、新配置未启动"的不一致状态（F-02）
+  if [ -n "${_AUTO_ROLLBACK_DIR:-}" ] && [ -d "${_AUTO_ROLLBACK_DIR}" ]; then
+    print_err "检测到未提交的 rep 事务，正在自动恢复到安装前状态..."
+    _AUTO_ROLLBACK_DIR=""
+    restore_latest_backup || true
+    reconcile_state || true
+    render_config || true
+    start_service || true
+  fi
   release_lock
   exit "${exit_code}"
 }
@@ -354,22 +364,38 @@ reconcile_state() {
   done < <(jq -r 'keys[]' "${SECRETS_FILE}" 2>/dev/null | tr -d '\r')
 }
 
-# 破坏性操作前的状态快照；仅保留最近 10 份
+# 破坏性操作前的状态快照；仅保留最近 10 份。
+# 快照为"配置自包含"：除 JSON 元数据外一并备份 certs/ 证书与私钥，保证
+# delete_all_nodes / rep 等破坏性操作后的 restore 能完整重建（否则恢复的
+# 节点 JSON 会引用已被删除的证书文件而失效）。备份过程先在临时目录组装
+# 再原子 mv，避免中断留下残缺备份。
 backup_state() {
-  local backup_dir
-  backup_dir="${BASE_DIR}/backups/$(date +%Y%m%d-%H%M%S)"
-  mkdir -p "${backup_dir}" && chmod 700 "${BASE_DIR}/backups" "${backup_dir}"
-  local f
+  local backup_dir tmpdir f
+  backup_dir="${BASE_DIR}/backups/$(date +%Y%m%d-%H%M%S)-$(printf '%04d' $((RANDOM % 10000)))-$$"
+  ensure_dir_mode "${BASE_DIR}/backups" 700
+  tmpdir="$(mktemp -d "${BASE_DIR}/backups/.staging.XXXXXX")" || return 1
+  mkdir -p "${tmpdir}/certs" && chmod 700 "${tmpdir}/certs"
+
   for f in nodes.json secrets.json config.json settings.json; do
-    [ -f "${BASE_DIR}/${f}" ] && cp "${BASE_DIR}/${f}" "${backup_dir}/${f}"
+    [ -f "${BASE_DIR}/${f}" ] && cp "${BASE_DIR}/${f}" "${tmpdir}/${f}" && chmod 600 "${tmpdir}/${f}"
   done
-  find "${BASE_DIR}/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r | tail -n +11 | xargs -r rm -rf
+  # 证书/私钥（仅当存在）一并纳入，恢复时可完整回滚
+  if [ -d "${CERT_DIR}" ]; then
+    find "${CERT_DIR}" -maxdepth 1 -type f \( -name '*.crt' -o -name '*.key' \) -exec cp {} "${tmpdir}/certs/" \; 2>/dev/null || true
+  fi
+  chmod 700 "${BASE_DIR}/backups" 2>/dev/null || true
+  if ! mv "${tmpdir}" "${backup_dir}"; then
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+
+  find "${BASE_DIR}/backups" -mindepth 1 -maxdepth 1 ! -name '.staging.*' -type d 2>/dev/null | sort -r | tail -n +11 | xargs -r rm -rf
   printf '%s' "${backup_dir}"
 }
 
 restore_latest_backup() {
   local latest f
-  latest="$(find "${BASE_DIR}/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | tail -n 1)"
+  latest="$(find "${BASE_DIR}/backups" -mindepth 1 -maxdepth 1 ! -name '.staging.*' -type d 2>/dev/null | sort | tail -n 1)"
   if [ -z "${latest}" ]; then
     print_err "没有可用的状态备份。"
     return 1
@@ -379,6 +405,17 @@ restore_latest_backup() {
       cp "${latest}/${f}" "${BASE_DIR}/${f}" && chmod 600 "${BASE_DIR}/${f}"
     fi
   done
+  # 一并恢复证书/私钥（若该快照含 certs/），使自签/自定义证书节点完整可回滚
+  if [ -d "${latest}/certs" ]; then
+    ensure_dir_mode "${CERT_DIR}" 700
+    local cf
+    for cf in "${latest}/certs/"*.crt "${latest}/certs/"*.key; do
+      [ -f "${cf}" ] || continue
+      if cp "${cf}" "${CERT_DIR}/" 2>/dev/null; then
+        chmod 600 "${CERT_DIR}/$(basename "${cf}")" 2>/dev/null || true
+      fi
+    done
+  fi
   print_ok "已从备份恢复：${latest}"
 }
 
@@ -674,22 +711,29 @@ argo_domain_resolvable() {
   fi
 
   # 本地解析不可用或未命中：查公共 DoH 记录（1.1.1.1 / dns.google 双源，绕开本机负缓存）。
+  # A 与 AAAA 都查：TryCloudflare 域名可能只发布 IPv6（AAAA），仅看 A 会漏判；
+  # 任一类型有记录即视为已发布。
   # 语义区分：
   #   DoH 应答"无记录"（确认未发布）           -> 返回失败，调用方重试
   #   DoH 网络不可达（无法核验，如墙内环境）   -> fail-open 放行并告警，
   #     因为 cloudflared 日志已出现域名即代表边缘注册成功，此时拒绝会让
   #     弱网机器的临时隧道永远写不进域名（v0.2.19 前的故障面）
   if command_exists curl && command_exists jq; then
-    local doh_verified=0 answered=0 records source
-    for source in "https://1.1.1.1/dns-query?name=${domain}.&type=A" "https://dns.google/resolve?name=${domain}.&type=A"; do
-      records="$(curl -fsS --max-time 6 -H 'accept: application/dns-json' "${source}" 2>/dev/null | jq -r '[.Answer[]? | select(.type == 1)] | length' 2>/dev/null || true)"
-      [ -n "${records}" ] || continue
-      doh_verified=1
-      if [ "${records}" -gt 0 ]; then
-        return 0
+    local doh_verified=0 answered=0 records source base_url record_type
+    for base_url in "https://1.1.1.1/dns-query?name=${domain}." "https://dns.google/resolve?name=${domain}."; do
+      for record_type in A AAAA; do
+        records="$(curl -fsS --max-time 6 -H 'accept: application/dns-json' "${base_url}&type=${record_type}" 2>/dev/null | jq -r '[.Answer[]? | select(.type == 1 or .type == 28)] | length' 2>/dev/null || true)"
+        [ -n "${records}" ] || continue
+        doh_verified=1
+        if [ "${records}" -gt 0 ]; then
+          return 0
+        fi
+      done
+      if [ "${doh_verified}" = 1 ]; then
+        # 该源正常应答但 A/AAAA 均无记录 -> 确认未发布
+        answered=1
+        break
       fi
-      answered=1
-      break
     done
     if [ "${doh_verified}" = 0 ]; then
       print_warn "公共 DoH 均不可达，无法核验 ${domain} 的 DNS 发布，按隧道注册结果放行。"
@@ -823,6 +867,20 @@ pid_matches_binary() {
   [ "${exe}" = "${binary}" ]
 }
 
+# 判断 PID 是否仍是"我们启动的实例"：存活且（/proc 可用时）指向预期二进制。
+# /proc 不可用（无 root/精简系统）时退化为仅 kill -0 存活判断（尽力而为）。
+# 用于 watchdog/service_state 的存活检测，避免 PID 复用导致漏重启或误判。
+pid_matches_binary_or_alive() {
+  local pid="$1"
+  local binary="$2"
+  [ -n "${pid}" ] || return 1
+  kill -0 "${pid}" 2>/dev/null || return 1
+  if [ ! -d /proc ]; then
+    return 0
+  fi
+  pid_matches_binary "${pid}" "${binary}"
+}
+
 kill_pid_file() {
   local pid_file="$1"
   local expect="${2:-}"
@@ -931,13 +989,16 @@ go_mem_limit_value() {
 
 build_share_link() {
   local tag="$1"
-  local protocol name port public_ip host uuid password username
+  local public_ip="${2:-}"
+  local protocol name port host uuid password username fp
   local reality_server public_key short_id ws_path preferred_domain endpoint_domain host_domain tls_server cert_mode
 
   protocol="$(node_value "$tag" "protocol")"
   name="$(node_value "$tag" "name")"
   port="$(node_value "$tag" "port")"
-  public_ip="$(get_public_ip)"
+  # 支持外部一次性传入解析好的公网 IP（第 2 参），便于订阅/列表在一次网络探测后
+  # 复用，避免 N 个节点重复探测；未传时回退进程内缓存探测。
+  public_ip="${public_ip:-$(get_public_ip)}"
   host="$(wrap_host "$public_ip")"
 
   case "$protocol" in
@@ -959,7 +1020,7 @@ build_share_link() {
       print_warn "WS-TLS 节点 ${tag} 使用默认优选域名 ${DEFAULT_CDN_DOMAIN}：仅当该域名已接入本机前置 CDN 时可用，否则请把 cdn_host 设为你自己的域名。"
     fi
     printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s' \
-      "$uuid" "$(wrap_host "$(url_encode "$preferred_domain")")" "$port" \
+      "$uuid" "$(wrap_host "$preferred_domain")" "$port" \
       "$(url_encode "$host_domain")" "$(url_encode "$host_domain")" "$(url_encode "$ws_path")"
     if [ "$cert_mode" = "self-signed" ]; then
       printf '&allowInsecure=1'
@@ -987,7 +1048,7 @@ build_share_link() {
       return 0
     fi
     printf 'vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
-      "$uuid" "$(wrap_host "$(url_encode "$preferred_domain")")" \
+      "$uuid" "$(wrap_host "$preferred_domain")" \
       "$(url_encode "$endpoint_domain")" "$(url_encode "$endpoint_domain")" "$(url_encode "$ws_path")" "$(url_encode "$name")"
     ;;
   tuic-v5)

@@ -143,12 +143,30 @@ assert_eval_false "is_safe_domain 含空格" 'is_safe_domain "a b.com"'
 assert_eval_false "is_safe_domain 含 &" 'is_safe_domain "a&b.com"'
 assert_eval_false "is_safe_domain 空值" 'is_safe_domain ""'
 
+# --- IPv6 authority 生成（审查 F-05）：必须先 wrap_host 加括号、再编码 query 字段 ---
+json_set_record "${NODES_FILE}" "n6ws" '{"protocol":"vless-ws-tls","name":"IPv6WS","port":443,"preferred_domain":"2001:db8::1","host_domain":"t.example.com","ws_path":"/p","certificate_mode":"custom"}'
+json_set_record "${SECRETS_FILE}" "n6ws" '{"uuid":"u6ws"}'
+assert_eval_true "IPv6 WS authority 加括号（不被 url_encode）" 'build_share_link n6ws | grep -q "@\[2001:db8::1\]:443"'
+assert_eval_false "IPv6 WS authority 不做 %5B 编码" 'build_share_link n6ws | grep -q "%5B2001"'
+json_set_record "${NODES_FILE}" "n6a" '{"protocol":"vless-argo","name":"A6","port":443,"preferred_domain":"2001:db8::99","ws_path":"/w","endpoint_domain":"demo.trycloudflare.com"}'
+json_set_record "${SECRETS_FILE}" "n6a" '{"uuid":"u6a"}'
+assert_eval_true "IPv6 Argo authority 加括号" 'build_share_link n6a | grep -q "@\[2001:db8::99\]:443"'
+json_set_record "${NODES_FILE}" "n6d" '{"protocol":"vless-ws-tls","name":"Domain","port":443,"preferred_domain":"cdn.example.com","host_domain":"h.example.com","ws_path":"/p","certificate_mode":"custom"}'
+json_set_record "${SECRETS_FILE}" "n6d" '{"uuid":"u6d"}'
+assert_eval_true "域名 WS authority 不受影响" 'build_share_link n6d | grep -q "@cdn.example.com:443"'
+
+# --- fp 局部变量隔离（Bug #5）：hy2 自签时 fp 不得泄漏到全局 ---
+assert_eval_true "hy2 fp 不泄漏到全局" 'unset fp; build_share_link n2b >/dev/null; [ -z "${fp:-}" ]'
+
 # --- PID 文件严格校验（审查 F-03） ---
 printf 'abc\n' >"${RUNTIME_DIR}/bad.pid"
 assert_eval_false "非数字 PID 被拒绝" 'read_pid_file "${RUNTIME_DIR}/bad.pid"'
 printf ' 42 \n' >"${RUNTIME_DIR}/ws.pid"
 assert_eq "PID 去除空白" "42" "$(read_pid_file "${RUNTIME_DIR}/ws.pid")"
 rm -f "${RUNTIME_DIR}/bad.pid" "${RUNTIME_DIR}/ws.pid"
+
+# --- PID→二进制身份校验（审查 F-01）：错误二进制不得判为存活的服务实例 ---
+assert_eval_false "pid_matches_binary_or_alive 拒绝身份不符进程" 'pid_matches_binary_or_alive $$ /nonexistent/sbm-other-binary'
 
 # --- 自签证书与回退逻辑 ---
 assert_eval_true "ensure_tls_material 生成证书" 'pair="$(ensure_tls_material tag_tls www.bing.com)"; [ -f "${pair%|*}" ] && [ -f "${pair#*|}" ]'
@@ -162,15 +180,20 @@ export key_path="${cpair#*|}"
 assert_eval_true "custom 证书经环境变量正确导入" 'auto_cert_bundle ctest2 www.bing.com | grep -q "^custom|"'
 unset cert cert_path key_path
 
-# --- 状态备份与恢复 ---
+# --- 状态备份与恢复（含证书，审查 F-02/F-09） ---
 wipe_records
 json_set_record "${NODES_FILE}" "bk" '{"protocol":"socks5","name":"BK","port":1234,"username":"u"}'
 json_set_record "${SECRETS_FILE}" "bk" '{"password":"p"}'
-backup_state >/dev/null
+mkdir -p "${CERT_DIR}" && printf 'CERT' >"${CERT_DIR}/bk.crt" && printf 'KEY' >"${CERT_DIR}/bk.key"
+bkp_dir="$(backup_state)"
+assert_eval_true "备份目录名唯一（随机+进程后缀, 审查 F-09）" '[[ "${bkp_dir}" =~ [0-9]{4}-[0-9]+$ ]]'
+assert_eval_true "备份含证书文件（审查 F-02）" '[ -f "${bkp_dir}/certs/bk.crt" ] && [ -f "${bkp_dir}/certs/bk.key" ]'
 wipe_records
 assert_eq "清空后节点为 0" "0" "$(jq length "${NODES_FILE}")"
 restore_latest_backup
 assert_eq "备份恢复节点" "1" "$(jq length "${NODES_FILE}")"
+assert_eval_true "恢复过程一并还原证书（审查 F-02）" '[ -f "${CERT_DIR}/bk.crt" ] && [ -f "${CERT_DIR}/bk.key" ]'
+rm -f "${CERT_DIR}/bk.crt" "${CERT_DIR}/bk.key"
 
 # --- 崩溃对账 ---
 wipe_records
