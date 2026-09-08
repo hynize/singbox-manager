@@ -285,9 +285,21 @@ assert_eval_false "download_file_multi 全部源失败返回非零" 'download_fi
 # --- CLI 用法输出 ---
 assert_eval_true "print_cli_usage 可执行" 'print_cli_usage | grep -q "用法"'
 
-# --- auto_add_vless_ws_tls 记录 ws_mode/cdn_port（v0.2.22） ---
+# --- auto_add_vless_ws_tls 记录 ws_mode/cdn_port/cdn_sni（v0.2.22 / v0.3.0） ---
 ENV_NAME=Sm ENV_UUID=22222222-3333-4444-5555-666666666666 ENV_CDN_HOST=cdn.example.com ENV_WS_HOST=ws.example.com ENV_WS_MODE=cdn ENV_CDN_PORT=8443 auto_add_vless_ws_tls 20837
 assert_eval_true "ws_mode=cdn 与 cdn_port 写入节点记录" 'jq -e "to_entries[] | select(.value.protocol == \"vless-ws-tls\" and .value.port == 20837 and .value.ws_mode == \"cdn\" and .value.cdn_port == 8443)" "${NODES_FILE}" >/dev/null'
+assert_eval_true "cdn_sni 未显式设置时默认同连接地址" 'jq -e "to_entries[] | select(.value.port == 20837 and .value.cdn_sni == \"cdn.example.com\")" "${NODES_FILE}" >/dev/null'
+# v0.3.0：ws_cdn 专用前缀优先于共享与旧名
+ENV_NAME=Sm2 ENV_WS_CDN_VLESS_CF_HOST=per-proto.example.com ENV_WS_CDN_VLESS_CF_PT=2096 ENV_WS_CDN_SNI=shared-sni.example.com ENV_WS_MODE=cdn auto_add_vless_ws_tls 20838
+assert_eval_true "ws_cdn_vless_* 覆盖共享/旧名值" 'jq -e "to_entries[] | select(.value.port == 20838 and .value.preferred_domain == \"per-proto.example.com\" and .value.cdn_port == 2096 and .value.cdn_sni == \"shared-sni.example.com\")" "${NODES_FILE}" >/dev/null'
+
+# --- v0.3.0：CDN 模式 cdn_sni 编号或回退连接地址链接生成（审查 ws_cdn 设计） ---
+json_set_record "${NODES_FILE}" "nws-cdn2" '{"protocol":"vless-ws-tls","name":"WS-CDN2","port":20835,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"custom","ws_mode":"cdn","cdn_port":8443,"cdn_sni":"origin.example.com"}'
+json_set_record "${SECRETS_FILE}" "nws-cdn2" '{"uuid":"uwsc2"}'
+assert_eval_true "WS CDN 连接地址用优选域名、SNI/Host 用 cdn_sni" 'build_share_link nws-cdn2 | grep -q "@cdn.example.com:8443?encryption=none&security=tls&sni=origin.example.com&type=ws&host=origin.example.com"'
+json_set_record "${NODES_FILE}" "nws-cdn0" '{"protocol":"vless-ws-tls","name":"WS-CDN0","port":20835,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"custom","ws_mode":"cdn","cdn_port":8443}'
+json_set_record "${SECRETS_FILE}" "nws-cdn0" '{"uuid":"uwsc0"}'
+assert_eval_true "WS CDN 无 cdn_sni 时回退连接地址" 'build_share_link nws-cdn0 | grep -q "sni=cdn.example.com&type=ws&host=cdn.example.com"'
 
 # --- 端到端前置：清空状态 ---
 wipe_records

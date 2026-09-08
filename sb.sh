@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.2.23"
+SCRIPT_VERSION="0.3.0"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -1691,15 +1691,19 @@ auto_add_vless_reality() {
 
 auto_add_vless_ws_tls() {
   local port="$1"
-  local tag name uuid preferred_domain host_domain ws_path cert_bundle cert_mode cert_file key_file node_json secret_json ws_mode cdn_port
+  local tag name uuid preferred_domain host_domain ws_path cert_bundle cert_mode cert_file key_file node_json secret_json ws_mode cdn_port cdn_sni
   tag="$(generate_tag "vless-ws-tls")"
   if [ -n "${ENV_NAME}" ]; then name="${ENV_NAME}-WS-TLS"; else name="VLESS-WS-TLS"; fi
   uuid="${ENV_UUID:-$(generate_uuid)}"
-  preferred_domain="${ENV_CDN_HOST:-${DEFAULT_CDN_DOMAIN}}"
+  # CDN 连接地址（ws_cdn 设计：脚本专用 > 共享 > 兼容旧名 cdn_host > 内置默认）
+  preferred_domain="${ENV_WS_CDN_VLESS_CF_HOST:-${ENV_WS_CDN_CF_HOST:-${ENV_CDN_HOST:-${DEFAULT_CDN_DOMAIN}}}}"
   host_domain="${ENV_WS_HOST:-${DEFAULT_TLS_SERVER}}"
   ws_path="${ENV_WS_PATH:-$(random_ws_path)}"
   ws_mode="${ENV_WS_MODE:-direct}"
-  cdn_port="${ENV_CDN_PORT:-443}"
+  # CDN 端口：脚本专用 > 共享 > 兼容旧名 cdn_port > 443
+  cdn_port="${ENV_WS_CDN_VLESS_CF_PT:-${ENV_WS_CDN_CF_PT:-${ENV_CDN_PORT:-443}}}"
+  # CDN 回源域名/SNI（仅 cdn 模式使用）：脚本专用 > 共享 > 内置默认（= 连接地址，与 jyucoeng 语义一致）
+  cdn_sni="${ENV_WS_CDN_VLESS_SNI:-${ENV_WS_CDN_SNI:-${preferred_domain}}}"
   case "${ws_mode}" in
   direct | cdn) ;;
   *)
@@ -1726,6 +1730,7 @@ auto_add_vless_ws_tls() {
     --arg ws_path "$ws_path" \
     --arg ws_mode "$ws_mode" \
     --argjson cdn_port "$cdn_port" \
+    --arg cdn_sni "$cdn_sni" \
     --arg certificate_mode "$cert_mode" \
     --arg certificate_path "$cert_file" \
     --arg key_path "$key_file" '{
@@ -1737,6 +1742,7 @@ auto_add_vless_ws_tls() {
       ws_path: $ws_path,
       ws_mode: $ws_mode,
       cdn_port: $cdn_port,
+      cdn_sni: $cdn_sni,
       certificate_mode: $certificate_mode,
       certificate_path: $certificate_path,
       key_path: $key_path
@@ -2074,6 +2080,14 @@ auto_install() {
   ENV_WS_MODE="$(env_var "ws_mode")"
   ENV_CDN_PORT="$(env_var "cdn_port")"
   ENV_CDN_HOST="$(env_domain_or_default "cdn_host" "${DEFAULT_CDN_DOMAIN}")"
+  # ws_cdn 设计（v0.3.0）：脚本专用前缀优先，共享前缀次之，兼容旧名 cdn_host/ws_host/cdn_port 兜底。
+  # 域名类变量经白名单校验，空值留给调用方回退链处理。
+  ENV_WS_CDN_CF_HOST="$(env_domain_or_default "ws_cdn_cf_host" "")"
+  ENV_WS_CDN_CF_PT="$(env_var "ws_cdn_cf_pt")"
+  ENV_WS_CDN_SNI="$(env_domain_or_default "ws_cdn_sni" "")"
+  ENV_WS_CDN_VLESS_CF_HOST="$(env_domain_or_default "ws_cdn_vless_cf_host" "")"
+  ENV_WS_CDN_VLESS_CF_PT="$(env_var "ws_cdn_vless_cf_pt")"
+  ENV_WS_CDN_VLESS_SNI="$(env_domain_or_default "ws_cdn_vless_sni" "")"
   # 默认优选域名仅在 ws_mode=cdn（CDN 中转）时要求本机已接入前置 CDN；直连模式（默认）不依赖 cdn_host
   if [ "${ENV_CDN_HOST}" = "${DEFAULT_CDN_DOMAIN}" ] && [ "${ENV_WS_MODE:-direct}" = "cdn" ] && [ "${confirm_default_cdn:-}" != "1" ]; then
     print_warn "⚠️ 未设置有效 cdn_host：WS-TLS(CDN 中转) 节点将使用内置优选域名 ${DEFAULT_CDN_DOMAIN}（仅该域名已接入本机前置 CDN 时可达）。"

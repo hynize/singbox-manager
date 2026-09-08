@@ -25,9 +25,13 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `vlrt` `wspt` `tupt` `anypt` `hypt` `socks5pt` | 各协议端口，填了即启用 | 不启用 |
 | `argo=vlpt` `argo_pt` | 启用 VLESS-Argo；本地端口 | 8001 |
 | `agn` `agk` | Argo 固定隧道域名 + Token（临时隧道留空） | 临时隧道 |
-| `cdn_host` | CDN 中转地址（优选 IP/域名），仅在 WS-TLS 选择 `ws_mode=cdn` 时使用 | `saas.sin.fan` |
+| `cdn_host` | CDN 中转连接地址（优选 IP/域名），仅在 WS-TLS 选择 `ws_mode=cdn` 时使用 | `saas.sin.fan` |
 | `ws_mode` | WS-TLS 连接方式：`direct` 直连服务器 IP（推荐）或 `cdn` 走 `cdn_host` 中转 | `direct` |
 | `cdn_port` | WS-TLS `cdn` 模式使用的 CDN 转发端口（如 443/8443/2053/2096） | `443` |
+| `ws_cdn_cf_host` | ws_cdn 共享 CDN 连接地址（专用前缀，覆盖 `cdn_host`） | `cdn_host` |
+| `ws_cdn_cf_pt` | ws_cdn 共享 CDN 转发端口（专用前缀，覆盖 `cdn_port`） | `cdn_port` |
+| `ws_cdn_sni` | ws_cdn 回源域名 = 客户端 SNI/Host（默认同连接地址，可单独设真实回源域名） | 连接地址 |
+| `ws_cdn_vless_cf_host/ws_cdn_vless_cf_pt/ws_cdn_vless_sni` | VLESS 专属覆盖（优先于 `ws_cdn_*` 共享值） | 共享值 |
 | `confirm_default_cdn=1` | 确知并接受默认优选域名时消除对应警告 | 未设置 |
 | `uuid` | VLESS/TUIC 共用 UUID | 自动生成 |
 | `passwd` | AnyTLS/HY2/TUIC 密码 | 自动生成 |

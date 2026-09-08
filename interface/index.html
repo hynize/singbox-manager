@@ -323,13 +323,20 @@
           <div class="ctl">
             <select id="ws_mode">
               <option value="direct">direct · 直连（服务器 IP + wspt，推荐）</option>
-              <option value="cdn">cdn · CDN 中转（域名 + CDN 端口）</option>
+              <option value="cdn">cdn · CDN 中转（回源域名 + CDN 端口）</option>
             </select>
           </div>
         </div>
         <div class="row">
           <label>CDN 转发端口 <span class="pill">cdn_port</span></label>
           <input type="text" id="cdn_port" placeholder="443（仅 ws_mode=cdn 生效，如 8443/2053/2096）" inputmode="numeric">
+        </div>
+        <div class="row">
+          <label>CDN 回源域名 <span class="pill">ws_cdn_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="ws_cdn_sni" class="has-pick" placeholder="留空默认同 CDN 连接地址（回源域名=SNI/Host）">
+            <select class="pick sni-pick" data-target="ws_cdn_sni"><option value="">选择…</option></select>
+          </div>
         </div>
         <div class="sep"></div>
         <div class="row">
@@ -554,6 +561,10 @@
     if (val('wspt')) {
       strEnv('ws_mode', 'ws_mode', envs);
       strEnv('cdn_port', 'cdn_port', envs);
+      // CDN 回源域名：仅 cdn 模式可用（ws_cdn 设计，v0.3.0）
+      if (val('ws_mode') === 'cdn') {
+        strEnv('ws_cdn_sni', 'ws_cdn_sni', envs);
+      }
     }
     strEnv('cdn_host', 'cdn_host', envs);
     strEnv('tu_sni', 'tu_sni', envs);
@@ -594,7 +605,9 @@
     $id('install-src').disabled = form === 'sbm';
   }
   function syncWsMode() {
-    $id('cdn_port').disabled = val('ws_mode') !== 'cdn';
+    var cdn = val('ws_mode') === 'cdn';
+    $id('cdn_port').disabled = !cdn;
+    $id('ws_cdn_sni').disabled = !cdn;
   }
 
   /* ---------------- 事件绑定 ---------------- */
