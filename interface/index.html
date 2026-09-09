@@ -200,7 +200,6 @@
         <h3>直连协议（可自由组合）</h3>
         <div class="pgrid">
           <div class="pitem"><label>VLESS-Reality <span class="pill">vlrt</span></label><input type="text" class="port-input" id="vlrt" placeholder="如 2083，或点 🎲 随机" inputmode="numeric"></div>
-          <div class="pitem"><label>VLESS-WS-TLS <span class="pill">wspt</span></label><input type="text" class="port-input" id="wspt" placeholder="如 8443，或点 🎲 随机" inputmode="numeric"></div>
           <div class="pitem"><label>AnyTLS <span class="pill">anypt</span></label><input type="text" class="port-input" id="anypt" placeholder="如 5443，或点 🎲 随机" inputmode="numeric"></div>
           <div class="pitem"><label>SOCKS5 <span class="pill">socks5pt</span></label><input type="text" class="port-input" id="socks5pt" placeholder="如 31017，或点 🎲 随机" inputmode="numeric"></div>
           <div class="pitem"><label>TUIC v5 <span class="pill">tupt</span></label><input type="text" class="port-input" id="tupt" placeholder="如 10443，或点 🎲 随机" inputmode="numeric"></div>
@@ -210,7 +209,47 @@
       </section>
 
       <section class="card">
-        <h2>③ 全局配置</h2>
+        <h2>② VLESS+WS+CDN <span class="tip">填写 wspt 端口即启用 VLESS+WS-TLS</span></h2>
+        <div class="row">
+          <label>VLESS-WS-TLS 端口 <span class="pill">wspt</span></label>
+          <input type="text" class="port-input" id="wspt" placeholder="如 8443，或点 🎲 随机" inputmode="numeric">
+        </div>
+        <div class="row">
+          <label>WS Host/SNI 域名 <span class="pill">ws_host</span></label>
+          <div class="ctl">
+            <input type="text" id="ws_host" class="has-pick" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="ws_host"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <label>WebSocket 路径 <span class="pill">ws_path</span></label>
+          <input type="text" id="ws_path" placeholder="留空自动生成随机路径（Argo/WS 共用）">
+        </div>
+        <div class="row">
+          <label>WS-TLS 连接方式 <span class="pill">ws_mode</span></label>
+          <div class="ctl">
+            <select id="ws_mode">
+              <option value="direct">direct · 直连（服务器 IP + wspt，推荐）</option>
+              <option value="cdn">cdn · CDN 中转（回源域名 + CDN 端口）</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <label>CDN 转发端口 <span class="pill">cdn_port</span></label>
+          <input type="text" id="cdn_port" placeholder="443（仅 ws_mode=cdn 生效，如 8443/2053/2096）" inputmode="numeric">
+        </div>
+        <div class="row">
+          <label>CDN 回源域名 <span class="pill">ws_cdn_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="ws_cdn_sni" class="has-pick" placeholder="留空默认同 CDN 连接地址（回源域名=SNI/Host）">
+            <select class="pick sni-pick" data-target="ws_cdn_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <p class="note">CDN 模式连接地址复用 <b>③ Argo 卡片</b>的 CF 优选域名 <span class="pill">cdn_host</span>（默认 saas.sin.fan）；直连模式直接用服务器 IP。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空。</p>
+      </section>
+
+      <section class="card">
+        <h2>④ 全局配置</h2>
         <div class="row">
           <label>UUID <span class="pill">uuid</span></label>
           <div class="ctl">
@@ -248,7 +287,7 @@
       </section>
 
       <section class="card">
-        <h2>⑤ SOCKS5 账号 <span class="tip">仅在①填写 socks5pt 后生效</span></h2>
+        <h2>⑥ SOCKS5 账号 <span class="tip">仅在①填写 socks5pt 后生效</span></h2>
         <div class="row">
           <label>SOCKS5 用户名 <span class="pill">socks5_username</span></label>
           <input type="text" id="socks5-username" placeholder="默认 user">
@@ -265,7 +304,7 @@
 
       <div class="col">
       <section class="card">
-        <h2>② Argo CDN 协议（VLESS + Argo 隧道）</h2>
+        <h2>③ Argo CDN 协议（VLESS + Argo 隧道）</h2>
         <div class="row">
           <label>启用 Argo <span class="pill">argo</span></label>
           <select id="argo">
@@ -299,43 +338,12 @@
       </section>
 
       <section class="card">
-        <h2>④ SNI 与 WebSocket <span class="tip">SNI 留空默认 www.apple.com</span></h2>
+        <h2>⑤ SNI 配置 <span class="tip">SNI 留空默认 www.apple.com</span></h2>
         <div class="row">
           <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
           <div class="ctl">
             <input type="text" id="vl_sni" class="has-pick" placeholder="留空默认 www.apple.com">
             <select class="pick sni-pick" data-target="vl_sni"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <div class="row">
-          <label>WS Host/SNI 域名 <span class="pill">ws_host</span></label>
-          <div class="ctl">
-            <input type="text" id="ws_host" class="has-pick" placeholder="留空默认 www.apple.com">
-            <select class="pick sni-pick" data-target="ws_host"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <div class="row">
-          <label>WebSocket 路径 <span class="pill">ws_path</span></label>
-          <input type="text" id="ws_path" placeholder="留空自动生成随机路径（Argo/WS 共用）">
-        </div>
-        <div class="row">
-          <label>WS-TLS 连接方式 <span class="pill">ws_mode</span></label>
-          <div class="ctl">
-            <select id="ws_mode">
-              <option value="direct">direct · 直连（服务器 IP + wspt，推荐）</option>
-              <option value="cdn">cdn · CDN 中转（回源域名 + CDN 端口）</option>
-            </select>
-          </div>
-        </div>
-        <div class="row">
-          <label>CDN 转发端口 <span class="pill">cdn_port</span></label>
-          <input type="text" id="cdn_port" placeholder="443（仅 ws_mode=cdn 生效，如 8443/2053/2096）" inputmode="numeric">
-        </div>
-        <div class="row">
-          <label>CDN 回源域名 <span class="pill">ws_cdn_sni</span></label>
-          <div class="ctl">
-            <input type="text" id="ws_cdn_sni" class="has-pick" placeholder="留空默认同 CDN 连接地址（回源域名=SNI/Host）">
-            <select class="pick sni-pick" data-target="ws_cdn_sni"><option value="">选择…</option></select>
           </div>
         </div>
         <div class="sep"></div>
@@ -364,7 +372,7 @@
       </section>
 
       <section class="card">
-        <h2>⑥ 执行动作 <span class="tip">尾部参数</span></h2>
+        <h2>⑦ 执行动作 <span class="tip">尾部参数</span></h2>
         <div class="row">
           <label>执行动作</label>
           <select id="sbm-tail">
