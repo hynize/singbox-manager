@@ -293,6 +293,16 @@ assert_eval_true "cdn_sni 未显式设置时默认同连接地址" 'jq -e "to_en
 ENV_NAME=Sm2 ENV_WS_CDN_VLESS_CF_HOST=per-proto.example.com ENV_WS_CDN_VLESS_CF_PT=2096 ENV_WS_CDN_SNI=shared-sni.example.com ENV_WS_MODE=cdn auto_add_vless_ws_tls 20838
 assert_eval_true "ws_cdn_vless_* 覆盖共享/旧名值" 'jq -e "to_entries[] | select(.value.port == 20838 and .value.preferred_domain == \"per-proto.example.com\" and .value.cdn_port == 2096 and .value.cdn_sni == \"shared-sni.example.com\")" "${NODES_FILE}" >/dev/null'
 
+# --- v0.3.3：Argo 独立优选域名/端口（argo_cdn_host/argo_cdn_port 独立于 WS-CDN） ---
+ENV_NAME=Ar1 ENV_ARGO_CDN_HOST=argo.example.com ENV_ARGO_CDN_PORT=2053 auto_add_vless_argo 8002
+assert_eval_true "argo_cdn_host/argo_cdn_port 写入节点记录" 'jq -e "to_entries[] | select(.value.protocol == \"vless-argo\" and .value.port == 8002 and .value.preferred_domain == \"argo.example.com\" and .value.cdn_port == 2053)" "${NODES_FILE}" >/dev/null'
+ENV_ARGO_CDN_HOST="" ENV_CDN_HOST="fallback.example.com" auto_add_vless_argo 8003
+assert_eval_true "argo_cdn 未设置时回退 cdn_host" 'jq -e "to_entries[] | select(.value.port == 8003 and .value.preferred_domain == \"fallback.example.com\" and .value.cdn_port == 443)" "${NODES_FILE}" >/dev/null'
+json_set_record "${NODES_FILE}" "nargo-cdn" '{"protocol":"vless-argo","name":"ArgoCDN","port":8001,"preferred_domain":"argo.example.com","cdn_port":2053,"ws_path":"/w","endpoint_domain":"demo.trycloudflare.com"}'
+json_set_record "${SECRETS_FILE}" "nargo-cdn" '{"uuid":"uac"}'
+assert_eval_true "Argo 链接使用 argo_cdn_port" 'build_share_link nargo-cdn | grep -q "@argo.example.com:2053"'
+assert_eval_false "Argo 链接不再硬编码 443" 'build_share_link nargo-cdn | grep -q "443?encryption"'
+
 # --- v0.3.0：CDN 模式 cdn_sni 编号或回退连接地址链接生成（审查 ws_cdn 设计） ---
 json_set_record "${NODES_FILE}" "nws-cdn2" '{"protocol":"vless-ws-tls","name":"WS-CDN2","port":20835,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"custom","ws_mode":"cdn","cdn_port":8443,"cdn_sni":"origin.example.com"}'
 json_set_record "${SECRETS_FILE}" "nws-cdn2" '{"uuid":"uwsc2"}'

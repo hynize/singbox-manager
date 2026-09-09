@@ -1069,13 +1069,15 @@ build_share_link() {
     uuid="$(secret_value "$tag" "uuid")"
     ws_path="$(node_value "$tag" "ws_path")"
     preferred_domain="$(node_value "$tag" "preferred_domain")"
+    cdn_port="$(node_value "$tag" "cdn_port")"
+    cdn_port="${cdn_port:-443}"
     endpoint_domain="$(node_value "$tag" "endpoint_domain")"
     if [ -z "${endpoint_domain}" ] || [ "${endpoint_domain}" = "待分配.example.com" ]; then
       print_warn "节点 ${tag} 的 Argo 域名尚未分配（隧道可能未连上），链接暂不可用；稍后重试 sbm list。"
       return 0
     fi
-    printf 'vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
-      "$uuid" "$(wrap_host "$preferred_domain")" \
+    printf 'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=%s#%s' \
+      "$uuid" "$(wrap_host "$preferred_domain")" "$cdn_port" \
       "$(url_encode "$endpoint_domain")" "$(url_encode "$endpoint_domain")" "$(url_encode "$ws_path")" "$(url_encode "$name")"
     ;;
   tuic-v5)

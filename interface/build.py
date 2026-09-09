@@ -47,6 +47,14 @@ def main() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
     with io.open(os.path.join(here, 'index.html'), encoding='utf-8') as f:
         html = f.read()
+    # VERSION 优先取脚本同目录（check-version 临时重建会复制到同目录），
+    # 仓库场景下位于 interface/../VERSION
+    version_path = os.path.join(here, 'VERSION')
+    if not os.path.isfile(version_path):
+        version_path = os.path.join(here, '..', 'VERSION')
+    with io.open(version_path, encoding='utf-8') as f:
+        version = f.read().strip()
+    html = html.replace('__VERSION__', version)
 
     out = HEADER % json.dumps(html, ensure_ascii=False)
     with io.open(os.path.join(here, 'worker.js'), 'w', encoding='utf-8', newline='\n') as f:

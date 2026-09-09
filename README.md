@@ -25,7 +25,9 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `vlrt` `wspt` `tupt` `anypt` `hypt` `socks5pt` | 各协议端口，填了即启用 | 不启用 |
 | `argo=vlpt` `argo_pt` | 启用 VLESS-Argo；本地端口 | 8001 |
 | `agn` `agk` | Argo 固定隧道域名 + Token（临时隧道留空） | 临时隧道 |
-| `cdn_host` | CDN 中转连接地址（优选 IP/域名），Argo 与 WS-TLS 共用 | `saas.sin.fan` |
+| `cdn_host` | CDN 中转连接地址（优选 IP/域名），WS-TLS CDN 使用（Argo 也可回退使用） | `saas.sin.fan` |
+| `argo_cdn_host` | **Argo 专属优选域名**，独立于 `cdn_host`（v0.3.3；留空回退 `cdn_host`） | `cdn_host` |
+| `argo_cdn_port` | **Argo CDN 转发端口**（如 443/2053/2083/2087/2096/8443），独立于 `cdn_port` | `443` |
 | `ws_mode` | WS-TLS 连接方式：`cdn`（经 `cdn_host` 中转）或 `direct` 直连服务器 IP（脚本后端保留，命令行可设） | `direct` |
 | `cdn_port` | WS-TLS `cdn` 模式使用的 CDN 转发端口（如 443/8443/2053/2096） | `443` |
 | `ws_cdn_cf_host` | ws_cdn 共享 CDN 连接地址（专用前缀，覆盖 `cdn_host`） | `cdn_host` |

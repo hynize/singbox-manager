@@ -51,7 +51,7 @@ fi
 
 # worker.js 必须与 index.html 保持同步：在临时目录中重建一份再逐字节对比
 tmp_iface="$(mktemp -d)"
-cp interface/index.html interface/build.py "${tmp_iface}/"
+cp interface/index.html interface/build.py VERSION "${tmp_iface}/"
 (cd "${tmp_iface}" && "$py" build.py >/dev/null)
 if ! diff -q interface/worker.js "${tmp_iface}/worker.js" >/dev/null; then
   rm -rf "${tmp_iface}"

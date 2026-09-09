@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="0.3.2"
+SCRIPT_VERSION="0.3.3"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -1801,11 +1801,17 @@ auto_argo_requested() {
 
 auto_add_vless_argo() {
   local port="$1"
-  local tag name uuid preferred_domain ws_path argo_mode argo_token endpoint_domain node_json secret_json
+  local tag name uuid preferred_domain cdn_port ws_path argo_mode argo_token endpoint_domain node_json secret_json
   tag="$(generate_tag "vless-argo")"
-  if [ -n "${ENV_NAME}" ]; then name="${ENV_NAME}-Argo"; else name="VLESS-Argo"; fi
+  if [ -n "${ENV_NAME:-}" ]; then name="${ENV_NAME}-Argo"; else name="VLESS-Argo"; fi
   uuid="${ENV_UUID:-$(generate_uuid)}"
-  preferred_domain="${ENV_CDN_HOST:-${DEFAULT_CDN_DOMAIN}}"
+  # Argo 专属优选域名/端口（v0.3.3）：独立于 WS-CDN，缺省回退 cdn_host/443
+  preferred_domain="${ENV_ARGO_CDN_HOST:-${ENV_CDN_HOST:-${DEFAULT_CDN_DOMAIN}}}"
+  cdn_port="${ENV_ARGO_CDN_PORT:-443}"
+  if [[ ! "${cdn_port}" =~ ^[0-9]+$ ]] || [ "${cdn_port}" -lt 1 ] || [ "${cdn_port}" -gt 65535 ]; then
+    print_warn "argo_cdn_port=${cdn_port} 非法，回退 443。"
+    cdn_port=443
+  fi
   ws_path="${ENV_WS_PATH:-$(random_ws_path)}"
   argo_token="$(env_var "agk")"
   endpoint_domain="$(env_var "agn")"
@@ -1825,6 +1831,7 @@ auto_add_vless_argo() {
     --arg name "$name" \
     --argjson port "$port" \
     --arg preferred_domain "$preferred_domain" \
+    --argjson cdn_port "$cdn_port" \
     --arg ws_path "$ws_path" \
     --arg argo_mode "$argo_mode" \
     --arg endpoint_domain "$endpoint_domain" '{
@@ -1832,6 +1839,7 @@ auto_add_vless_argo() {
       name: $name,
       port: $port,
       preferred_domain: $preferred_domain,
+      cdn_port: $cdn_port,
       ws_path: $ws_path,
       argo_mode: $argo_mode,
       endpoint_domain: $endpoint_domain
@@ -2080,6 +2088,9 @@ auto_install() {
   ENV_WS_MODE="$(env_var "ws_mode")"
   ENV_CDN_PORT="$(env_var "cdn_port")"
   ENV_CDN_HOST="$(env_domain_or_default "cdn_host" "${DEFAULT_CDN_DOMAIN}")"
+  # Argo 专属优选域名/端口（v0.3.3）：与 WS-CDN 独立设置，缺省回退 cdn_host/443
+  ENV_ARGO_CDN_HOST="$(env_domain_or_default "argo_cdn_host" "${ENV_CDN_HOST}")"
+  ENV_ARGO_CDN_PORT="$(env_var "argo_cdn_port")"
   # ws_cdn 设计（v0.3.0）：脚本专用前缀优先，共享前缀次之，兼容旧名 cdn_host/ws_host/cdn_port 兜底。
   # 域名类变量经白名单校验，空值留给调用方回退链处理。
   ENV_WS_CDN_CF_HOST="$(env_domain_or_default "ws_cdn_cf_host" "")"
