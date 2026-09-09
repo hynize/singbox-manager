@@ -209,43 +209,31 @@
       </section>
 
       <section class="card">
-        <h2>② VLESS+WS+CDN <span class="tip">填写 wspt 端口即启用 VLESS+WS-TLS</span></h2>
+        <h2>② VLESS+WS+CDN <span class="tip">填写 wspt 端口即启用（CDN 中转）</span></h2>
         <div class="row">
           <label>VLESS-WS-TLS 端口 <span class="pill">wspt</span></label>
           <input type="text" class="port-input" id="wspt" placeholder="如 8443，或点 🎲 随机" inputmode="numeric">
         </div>
         <div class="row">
-          <label>WS Host/SNI 域名 <span class="pill">ws_host</span></label>
+          <label>CF 优选域名 <span class="pill">cdn_host</span></label>
           <div class="ctl">
-            <input type="text" id="ws_host" class="has-pick" placeholder="留空默认 www.apple.com">
-            <select class="pick sni-pick" data-target="ws_host"><option value="">选择…</option></select>
+            <input type="text" id="cdn_host" class="has-pick" placeholder="留空默认 saas.sin.fan">
+            <select class="pick cdn-pick" data-target="cdn_host"><option value="">选择…</option></select>
           </div>
+        </div>
+        <div class="row">
+          <label>CDN 转发端口 <span class="pill">cdn_port</span></label>
+          <input type="text" id="cdn_port" placeholder="443（如 8443/2053/2096）" inputmode="numeric">
+        </div>
+        <div class="row">
+          <label>CDN 回源域名 <span class="pill">ws_cdn_sni</span> <b style="color:var(--warn)">必填</b></label>
+          <input type="text" id="ws_cdn_sni" placeholder="必填：回源域名=SNI/Host（如 ws.example.com）">
         </div>
         <div class="row">
           <label>WebSocket 路径 <span class="pill">ws_path</span></label>
           <input type="text" id="ws_path" placeholder="留空自动生成随机路径（Argo/WS 共用）">
         </div>
-        <div class="row">
-          <label>WS-TLS 连接方式 <span class="pill">ws_mode</span></label>
-          <div class="ctl">
-            <select id="ws_mode">
-              <option value="direct">direct · 直连（服务器 IP + wspt，推荐）</option>
-              <option value="cdn">cdn · CDN 中转（回源域名 + CDN 端口）</option>
-            </select>
-          </div>
-        </div>
-        <div class="row">
-          <label>CDN 转发端口 <span class="pill">cdn_port</span></label>
-          <input type="text" id="cdn_port" placeholder="443（仅 ws_mode=cdn 生效，如 8443/2053/2096）" inputmode="numeric">
-        </div>
-        <div class="row">
-          <label>CDN 回源域名 <span class="pill">ws_cdn_sni</span></label>
-          <div class="ctl">
-            <input type="text" id="ws_cdn_sni" class="has-pick" placeholder="留空默认同 CDN 连接地址（回源域名=SNI/Host）">
-            <select class="pick sni-pick" data-target="ws_cdn_sni"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <p class="note">CDN 模式连接地址复用 <b>③ Argo 卡片</b>的 CF 优选域名 <span class="pill">cdn_host</span>（默认 saas.sin.fan）；直连模式直接用服务器 IP。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空。</p>
+        <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。</p>
       </section>
 
       <section class="card">
@@ -327,14 +315,7 @@
           <input type="text" id="agk" placeholder="ey 开头字符串或 {…} JSON">
         </div>
         <div class="sep"></div>
-        <div class="row">
-          <label>CF 优选域名 <span class="pill">cdn_host</span></label>
-          <div class="ctl">
-            <input type="text" id="cdn_host" class="has-pick" placeholder="留空默认 saas.sin.fan">
-            <select class="pick cdn-pick" data-target="cdn_host"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <p class="note">Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。cloudflared 安装遵循强校验：拿不到官方 SHA256 校验值时默认拒绝安装，绝不以版本自报代替完整性校验。</p>
+        <p class="note"><b>CF 优选域名在 ② VLESS+WS+CDN 中配置</b>（<span class="pill">cdn_host</span>，Argo/WS-CDN 共用连接地址）。Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。cloudflared 安装遵循强校验：拿不到官方 SHA256 校验值时默认拒绝安装，绝不以版本自报代替完整性校验。</p>
       </section>
 
       <section class="card">
@@ -563,16 +544,12 @@
     strEnv('passwd', 'passwd', envs);
     // SNI 与 WS
     strEnv('vl_sni', 'vl_sni', envs);
-    strEnv('ws_host', 'ws_host', envs);
     strEnv('ws_path', 'ws_path', envs);
-    // WS-TLS 连接方式仅在启用 wspt 时下发
+    // WS-TLS（仅 CDN 中转，ws_cdn 设计 v0.3.0）：仅在启用 wspt 时下发
     if (val('wspt')) {
-      strEnv('ws_mode', 'ws_mode', envs);
+      envs.push(['ws_mode', "'cdn'"]);
       strEnv('cdn_port', 'cdn_port', envs);
-      // CDN 回源域名：仅 cdn 模式可用（ws_cdn 设计，v0.3.0）
-      if (val('ws_mode') === 'cdn') {
-        strEnv('ws_cdn_sni', 'ws_cdn_sni', envs);
-      }
+      strEnv('ws_cdn_sni', 'ws_cdn_sni', envs);
     }
     strEnv('cdn_host', 'cdn_host', envs);
     strEnv('tu_sni', 'tu_sni', envs);
@@ -612,15 +589,10 @@
     $id('dl').disabled = form === 'sbm';
     $id('install-src').disabled = form === 'sbm';
   }
-  function syncWsMode() {
-    var cdn = val('ws_mode') === 'cdn';
-    $id('cdn_port').disabled = !cdn;
-    $id('ws_cdn_sni').disabled = !cdn;
-  }
 
   /* ---------------- 事件绑定 ---------------- */
   document.addEventListener('input', function () { regen(); });
-  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); syncWsMode(); regen(); });
+  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); regen(); });
 
   $id('gen-uuid').addEventListener('click', function () { $id('uuid').value = genUuid(); regen(); });
   $id('gen-passwd').addEventListener('click', function () { $id('passwd').value = genPassword(); regen(); });
@@ -692,7 +664,7 @@
   });
 
   // CF 优选域名候选（留空默认 saas.sin.fan）
-  var CDN_LIST = ['cdns.doon.eu.org', 'cf.090227.xyz', 'cf.877771.xyz', 'cf.877774.xyz', 'cf.008500.xyz', 'cf.130519.xyz', 'cloudflare.182682.xyz', 'www.visa.sg', 'www.shopify.com', 'mfa.gov.ua', 'cf.zhetengsha.eu.org', 'cfip.xxxxxxxx.tk'];
+  var CDN_LIST = ['saas.sin.fan', 'cdns.doon.eu.org', 'cf.090227.xyz', 'cf.877771.xyz', 'cf.877774.xyz', 'cf.008500.xyz', 'cf.130519.xyz', 'cloudflare.182682.xyz', 'www.visa.sg', 'www.shopify.com', 'mfa.gov.ua', 'cf.zhetengsha.eu.org', 'cfip.xxxxxxxx.tk'];
   var cdnSel = document.querySelector('select.cdn-pick');
   CDN_LIST.forEach(function (d) {
     var o = document.createElement('option');
@@ -707,7 +679,7 @@
     regen();
   });
 
-  syncArgo(); syncCert(); syncForm(); syncWsMode();
+  syncArgo(); syncCert(); syncForm();
   regen();
 })();
 </script>
