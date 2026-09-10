@@ -354,12 +354,34 @@ rm -f "${RUNTIME_DIR}/ntest.restart_count"
 # S1：端口探活纯探测函数（本机未监听某高端口 -> 失败）
 assert_eval_false "probe_tcp_port 未监听端口失败" 'probe_tcp_port 127.0.0.1 65123 1'
 
-# P5：GOGC 开关 / 内存上限解析 / 网络调优开关
+# P5：GOGC 开关 / 内存上限解析 / 网络调优开关 / 智能 buffer 档位
 assert_eval_false "go_gc 默认不启用" 'go_gc_requested'
 assert_eval_true "go_gc=off 启用" '( go_gc=off; go_gc_requested )'
 assert_eval_true "net_tune 默认启用" 'net_tune_requested'
 assert_eval_false "net_tune=0 关闭" '( net_tune=0; net_tune_requested )'
 assert_eval_true "net_tune=1 启用" '( net_tune=1; net_tune_requested )'
+assert_eval_true "TCP buffer 内存上限为 16/32/64 之一" 'case $(get_tcp_buffer_cap_mb) in 16|32|64) true;; *) false;; esac'
+assert_eq "asia 低带宽 buffer=8" "8" "$(calculate_net_tune_buffer_mb 100 asia)"
+assert_eq "asia 1G buffer=16" "16" "$(calculate_net_tune_buffer_mb 1000 asia)"
+assert_eq "asia 2G buffer=24" "24" "$(calculate_net_tune_buffer_mb 2000 asia)"
+assert_eq "asia 5G buffer=28" "28" "$(calculate_net_tune_buffer_mb 5000 asia)"
+assert_eq "asia 千兆以上 buffer=32" "32" "$(calculate_net_tune_buffer_mb 10000 asia)"
+assert_eq "asia 下限边界 999Mbps" "12" "$(calculate_net_tune_buffer_mb 999 asia)"
+assert_eq "overseas 低带宽 buffer=16" "16" "$(calculate_net_tune_buffer_mb 300 overseas)"
+assert_eq "overseas 1G buffer=64" "64" "$(calculate_net_tune_buffer_mb 1000 overseas)"
+assert_eq "overseas 下限边界 999Mbps" "48" "$(calculate_net_tune_buffer_mb 999 overseas)"
+assert_eq "算档位 空带宽回退 1000Mbps" "16" "$(calculate_net_tune_buffer_mb "" asia)"
+assert_eval_true "buffer 受内存上限约束" '( B=$(calculate_net_tune_buffer_mb 10000 overseas); [ "$B" -le "$(get_tcp_buffer_cap_mb)" ] )'
+mkdir -p "${TEST_ROOT}/speedtest"
+cat >"${TEST_ROOT}/speedtest/speedtest" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "   Speedtest by Ookla 1.2.0"
+printf '%s\n' "Download:   812.34 Mbit/s"
+printf '%s\n' "Upload:   300.78 Mbit/s"
+EOF
+( cd "${TEST_ROOT}/speedtest"; chmod +x speedtest )
+assert_eq "Ookla 测速输出解析 Upload" "300" "$(run_speedtest "${TEST_ROOT}/speedtest/speedtest")"
+assert_eval_true "Ookla 官方 speedtest 识别" 'ls -la "${TEST_ROOT}/speedtest/speedtest" >/dev/null'
 
 # --- 端到端前置：清空状态 ---
 wipe_records

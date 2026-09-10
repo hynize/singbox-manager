@@ -874,20 +874,182 @@ net_tune_requested() {
   esac
 }
 
+# 吸收 Actions-bbr-v3 智能带宽优化：按物理内存限制 TCP buffer 上限（MB），
+# 防止小内存 VPS 因大带宽线路把缓冲区放大到 OOM
+get_tcp_buffer_cap_mb() {
+  local mem_kb
+  mem_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)"
+  if ! [[ "${mem_kb}" =~ ^[0-9]+$ ]]; then
+    printf '%s' 64
+  elif (( mem_kb < 524288 )); then
+    printf '%s' 16
+  elif (( mem_kb < 1048576 )); then
+    printf '%s' 32
+  else
+    printf '%s' 64
+  fi
+}
+
+# 按带宽（Mbps）与地区档位计算推荐 TCP buffer（MB，上限受内存约束）：
+# asia 保守档（RTT 通常 <100ms）、overseas 大缓冲档（RTT 150-300ms）。
+# 带宽非法/缺失回退 1000Mbps；缓冲区不超 get_tcp_buffer_cap_mb 上限。
+calculate_net_tune_buffer_mb() {
+  local bandwidth="$1" region="$2" cap_mb="$(get_tcp_buffer_cap_mb)"
+  local buffer_mb=16
+  bandwidth="${bandwidth%.*}"
+  if ! [[ "${bandwidth}" =~ ^[0-9]+$ ]] || (( bandwidth <= 0 )); then
+    bandwidth=1000
+  fi
+  if [ "${region}" = "overseas" ]; then
+    if (( bandwidth < 500 )); then buffer_mb=16
+    elif (( bandwidth < 1000 )); then buffer_mb=48
+    else buffer_mb=64; fi
+  else
+    if (( bandwidth < 500 )); then buffer_mb=8
+    elif (( bandwidth < 1000 )); then buffer_mb=12
+    elif (( bandwidth < 2000 )); then buffer_mb=16
+    elif (( bandwidth < 5000 )); then buffer_mb=24
+    elif (( bandwidth < 10000 )); then buffer_mb=28
+    else buffer_mb=32; fi
+  fi
+  (( buffer_mb > cap_mb )) && buffer_mb="${cap_mb}"
+  printf '%s' "${buffer_mb}"
+}
+
+OOKLA_SPEEDTEST_VERSION="1.2.0"
+
+# 查找官方 Ookla speedtest：优先 PATH，其次管理器本地下载路径
+find_ookla_speedtest() {
+  local bin
+  if command_exists speedtest && speedtest --version 2>/dev/null | grep -q "Speedtest by Ookla"; then
+    command -v speedtest
+    return 0
+  fi
+  bin="${BASE_DIR}/bin/speedtest"
+  if [ -x "${bin}" ] && "${bin}" --version 2>/dev/null | grep -q "Speedtest by Ookla"; then
+    printf '%s' "${bin}"
+    return 0
+  fi
+  return 1
+}
+
+speedtest_download_url() {
+  case "$(uname -m)" in
+  x86_64) printf 'https://install.speedtest.net/app/cli/ookla-speedtest-%s-linux-x86_64.tgz' "${OOKLA_SPEEDTEST_VERSION}" ;;
+  aarch64) printf 'https://install.speedtest.net/app/cli/ookla-speedtest-%s-linux-aarch64.tgz' "${OOKLA_SPEEDTEST_VERSION}" ;;
+  *) return 1 ;;
+  esac
+}
+
+# 尽力而为安装官方 Ookla speedtest 到管理器本地目录（自包含，不触碰 /usr/local/bin）
+ensure_ookla_speedtest() {
+  local bin url tmp_dir
+  [ -n "${NET_TUNE_SKIP_SPEEDTEST:-}" ] && return 1
+  command_exists curl || command_exists wget || return 1
+  command_exists tar || return 1
+  url="$(speedtest_download_url)" || return 1
+  mkdir -p "${BASE_DIR}/bin"
+  bin="${BASE_DIR}/bin/speedtest"
+  tmp_dir="$(mktemp -d "${BASE_DIR}/bin/.st.XXXXXX" 2>/dev/null)" || return 1
+  if command_exists curl; then
+    curl -fsSL --retry 2 --connect-timeout 10 --max-time 90 "${url}" -o "${tmp_dir}/t.tgz" || { rm -rf "${tmp_dir}"; return 1; }
+  else
+    wget -q --tries=2 --timeout=90 -O "${tmp_dir}/t.tgz" "${url}" || { rm -rf "${tmp_dir}"; return 1; }
+  fi
+  tar -xzf "${tmp_dir}/t.tgz" -C "${tmp_dir}" || { rm -rf "${tmp_dir}"; return 1; }
+  mv -f "${tmp_dir}/speedtest" "${bin}" && chmod 0755 "${bin}"
+  rm -rf "${tmp_dir}"
+  "${bin}" --version 2>/dev/null | grep -q "Speedtest by Ookla" || { rm -f "${bin}"; return 1; }
+  return 0
+}
+
+# 执行一次 Ookla 测速，解析 Upload（Mbps，取整）。测速节点延迟不参与计算（只用于带宽档位）。
+run_speedtest() {
+  local bin="$1" out up
+  out="$("${bin}" --accept-license --accept-gdpr 2>&1 || true)"
+  up="$(printf '%s' "${out}" | sed -nE 's/.*[Uu]pload:[[:space:]]*([0-9]+(\.[0-9]+)?).*/\1/p' | head -n1)"
+  if [[ "${up}" =~ ^[0-9]+(\.[0-9]+)?$ ]] && ! printf '%s' "${out}" | grep -qi 'FAILED\|error'; then
+    printf '%s' "${up%.*}"
+    return 0
+  fi
+  return 1
+}
+
+# 自动测速（尽力而为）：找到或安装 Ookla speedtest 后测一次带宽
+measure_net_bandwidth() {
+  local bin up
+  if ! bin="$(find_ookla_speedtest)"; then
+    ensure_ookla_speedtest || return 1
+    bin="$(find_ookla_speedtest)" || return 1
+  fi
+  if command_exists timeout; then
+    if [ -n "${NET_TUNE_SPEEDTEST_TIMEOUT:-}" ]; then
+      up="$(timeout "${NET_TUNE_SPEEDTEST_TIMEOUT}" bash -c "$(declare -f run_speedtest); run_speedtest '$bin'" 2>/dev/null || true)"
+    else
+      up="$(timeout 90 bash -c "$(declare -f run_speedtest); run_speedtest '$bin'" 2>/dev/null || true)"
+    fi
+  else
+    up="$(run_speedtest "${bin}" 2>/dev/null || true)"
+  fi
+  [[ "${up}" =~ ^[0-9]+$ ]] && { printf '%s' "${up}"; return 0; }
+  return 1
+}
+
 apply_network_tune() {
   net_tune_requested || return 0
   [ "$(id -u 2>/dev/null || echo 1)" = "0" ] || return 0
   command_exists sysctl || return 0
-  command_exists modprobe || true
+  # 冒烟测试环境不执行真实 sysctl/测速（免网络依赖与副作用）
+  if [ "${SBM_TEST_MODE:-0}" = "1" ]; then
+    return 0
+  fi
+  local region bandwidth buffer_mb buffer_bytes cap_mb
 
-  sysctl -w net.core.rmem_max=26214400 >/dev/null 2>&1 || true
-  sysctl -w net.core.wmem_max=26214400 >/dev/null 2>&1 || true
+  region="$(manager_env_or_setting "net_tune_region" "asia")"
+  case "${region}" in
+  asia | overseas) : ;;
+  *) region="asia" ;;
+  esac
+
+  buffer_mb="$(get_setting "net_tune_buffer_mb")"
+  bandwidth="$(get_setting "net_tune_bandwidth_mbps")"
+  if [ -n "${buffer_mb}" ] && [[ "${buffer_mb}" =~ ^[0-9]+$ ]]; then
+    : # 沿用已测速并持久化的 buffer
+  else
+    # 首次运行：优先显式带宽，否则自动测速，再按档位换算 buffer 并持久化
+    bandwidth="${bandwidth:-}"
+    if [ -z "${bandwidth}" ]; then
+      bandwidth="$(env_var "net_tune_bandwidth_mbps")"
+    fi
+    if [ -n "${bandwidth}" ] && [[ "${bandwidth}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      : # 用户给定带宽，跳过测速
+    elif [ -z "${NET_TUNE_SKIP_SPEEDTEST:-}" ]; then
+      print_ok "net_tune：正在自动测速以智能优化 TCP 缓冲（首次运行，可 NET_TUNE_SKIP_SPEEDTEST=1 跳过）..."
+      bandwidth="$(measure_net_bandwidth)" && print_ok "自动测速完成：约 ${bandwidth} Mbit/s。" || {
+        print_warn "自动测速不可用（缺少 speedtest 或网络受限），按带宽 1000Mbps 档位优化。"
+        bandwidth="1000"
+      }
+    else
+      bandwidth="1000"
+    fi
+    cap_mb="$(get_tcp_buffer_cap_mb)"
+    buffer_mb="$(calculate_net_tune_buffer_mb "${bandwidth}" "${region}")"
+    set_setting "net_tune_bandwidth_mbps" "${bandwidth}"
+    set_setting "net_tune_buffer_mb" "${buffer_mb}"
+    set_setting "net_tune_region" "${region}"
+    print_ok "net_tune：带宽约 ${bandwidth} Mbps（${region} 档），内存上限 ${cap_mb}MB，推荐 TCP 缓冲 ${buffer_mb}MB。"
+  fi
+
+  buffer_bytes=$((buffer_mb * 1024 * 1024))
+  sysctl -w net.core.rmem_max="${buffer_bytes}" >/dev/null 2>&1 || true
+  sysctl -w net.core.wmem_max="${buffer_bytes}" >/dev/null 2>&1 || true
   sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || true
   sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.tcp_rmem='4096 87380 26214400' >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.tcp_wmem='4096 16384 26214400' >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_rmem="4096 87380 ${buffer_bytes}" >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_wmem="4096 65536 ${buffer_bytes}" >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_limit_output_bytes=4194304 >/dev/null 2>&1 || true
   sysctl -w net.ipv4.tcp_slow_start_after_idle=0 >/dev/null 2>&1 || true
-  print_ok "已应用网络调优：BBR + fq + 大缓冲（仅本次运行生效）。"
+  print_ok "已应用网络调优：BBR + fq + ${buffer_mb}MB 缓冲（tcp_limit_output_bytes=4MB、slow_start_after_idle=0）。"
 }
 
 has_public_ipv4() {
