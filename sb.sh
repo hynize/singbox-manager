@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.1"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -1164,13 +1164,15 @@ express_restart() { :; }
     local up_mbps down_mbps bbr_profile
     up_mbps="$(node_value "$tag" "up_mbps")"
     down_mbps="$(node_value "$tag" "down_mbps")"
+    up_mbps="${up_mbps:-200}"
+    down_mbps="${down_mbps:-200}"
     # 全局 bbr_profile：aggressive|standard|conservative（sing-box 1.14.0+），空=默认
     bbr_profile="$(env_var "bbr_profile")"
     case "${bbr_profile}" in
     aggressive | standard | conservative) : ;;
     *) bbr_profile="" ;;
     esac
-    # 默认不限速（省略上下行带宽字段则客户端启用 BBR、不被限速）
+    # 默认上下行 200 Mbps（未显式设置时）；bbr_profile 留空用 sing-box 默认
     jq -n \
       --arg tag "$tag" \
       --arg name "$name" \
@@ -1549,8 +1551,10 @@ add_hy2() {
   password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$(generate_hex 8)}"
   tls_server="$(prompt_safe_domain "SNI 域名" "${DEFAULT_TLS_SERVER}")"
-  up_mbps="$(prompt_optional_value "上行带宽 Mbps（留空=不限速，默认 BBR）")"
-  down_mbps="$(prompt_optional_value "下行带宽 Mbps（留空=不限速，默认 BBR）")"
+  up_mbps="$(prompt_optional_value "上行带宽 Mbps（留空=默认 200）")"
+  up_mbps="${up_mbps:-200}"
+  down_mbps="$(prompt_optional_value "下行带宽 Mbps（留空=默认 200）")"
+  down_mbps="${down_mbps:-200}"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1988,14 +1992,16 @@ auto_add_hy2() {
   password="${ENV_PASSWD:-$(generate_hex 8)}"
   tls_server="${ENV_HY_SNI:-${DEFAULT_TLS_SERVER}}"
   # 局部名不用 up_mbps/down_mbps，避免遮蔽同名用户环境变量导致读取为空
-  # 留空=不限速（客户端 BBR 可用）；只填其一则另一个独立成单方向限速
+  # 默认 200 Mbps（未显式设置时）；只填其一则另一个独立成单方向限速
   __hy_up="$(env_var "up_mbps")"
   __hy_down="$(env_var "down_mbps")"
+  __hy_up="${__hy_up:-200}"
+  __hy_down="${__hy_down:-200}"
   case "${__hy_up}" in
-  *[!0-9]* | "") __hy_up="0" ;;
+  *[!0-9]* | "") __hy_up="200" ;;
   esac
   case "${__hy_down}" in
-  *[!0-9]* | "") __hy_down="0" ;;
+  *[!0-9]* | "") __hy_down="200" ;;
   esac
   cert_bundle="$(auto_cert_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"

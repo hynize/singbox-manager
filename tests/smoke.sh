@@ -326,11 +326,11 @@ assert_eval_true "tcp_fast_open=true 渲染进 inbound" 'jq -e ".tcp_fast_open =
 assert_eval_true "WS inbound 带 0-RTT early data 字段" 'jq -e ".transport.max_early_data == 2048 and .transport.early_data_header_name == \"Sec-WebSocket-Protocol\"" "${tmpcfg}" >/dev/null'
 rm -f "${tmpcfg}"
 
-# P1：HY2 无 up/down 字段 -> 渲染时省略 -> 不限速（客户端 BBR 可用）
+# P1：HY2 无 up/down 字段 -> 渲染时回退默认 200 Mbps
 tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
 render_inbound_for_tag nhyu >"${tmpcfg}" 2>/dev/null
-assert_eval_false "HY2 不限速时不写 up_mbps" 'jq -e ".up_mbps" "${tmpcfg}" >/dev/null'
-assert_eval_false "HY2 不限速时不写 down_mbps" 'jq -e ".down_mbps" "${tmpcfg}" >/dev/null'
+assert_eval_true "HY2 未设置带宽时写默认 up_mbps=200" 'jq -e ".up_mbps == 200" "${tmpcfg}" >/dev/null'
+assert_eval_true "HY2 未设置带宽时写默认 down_mbps=200" 'jq -e ".down_mbps == 200" "${tmpcfg}" >/dev/null'
 rm -f "${tmpcfg}"
 
 # P1：填写带宽时仍正确写入（含 0-RTT WS 渲染）
@@ -357,7 +357,8 @@ assert_eval_false "probe_tcp_port 未监听端口失败" 'probe_tcp_port 127.0.0
 # P5：GOGC 开关 / 内存上限解析 / 网络调优开关
 assert_eval_false "go_gc 默认不启用" 'go_gc_requested'
 assert_eval_true "go_gc=off 启用" '( go_gc=off; go_gc_requested )'
-assert_eval_false "net_tune 默认不启用" 'net_tune_requested'
+assert_eval_true "net_tune 默认启用" 'net_tune_requested'
+assert_eval_false "net_tune=0 关闭" '( net_tune=0; net_tune_requested )'
 assert_eval_true "net_tune=1 启用" '( net_tune=1; net_tune_requested )'
 
 # --- 端到端前置：清空状态 ---

@@ -323,75 +323,10 @@
         </div>
         <div class="sep"></div>
         <div class="row">
-          <label>证书模式 <span class="pill">cert</span></label>
-          <select id="cert">
-            <option value="self">self · 自签证书（默认）</option>
-            <option value="custom">custom · 导入自有证书</option>
-          </select>
-        </div>
-        <div class="row">
-          <label>证书路径 <span class="pill">cert_path</span></label>
-          <input type="text" id="cert_path" placeholder="/etc/ssl/fullchain.pem" disabled>
-        </div>
-        <div class="row">
-          <label>私钥路径 <span class="pill">key_path</span></label>
-          <input type="text" id="key_path" placeholder="/etc/ssl/private.pem" disabled>
-        </div>
-        <div class="sep"></div>
-        <div class="row">
-          <label>TCP Fast Open <span class="pill">tcp_fast_open</span></label>
-          <select id="tcp_fast_open">
-            <option value="1" selected>1 · 开启（默认）</option>
-            <option value="0">0 · 关闭</option>
-          </select>
-        </div>
-        <div class="row">
-          <label>日志级别 <span class="pill">log_level</span></label>
-          <select id="log_level">
-            <option value="warn" selected>warn · 警告（默认，低 IO）</option>
-            <option value="info">info · 信息</option>
-            <option value="debug">debug · 调试</option>
-          </select>
-        </div>
-        <div class="sep"></div>
-        <div class="row">
-          <label>HY2 上行带宽 Mbps <span class="pill">up_mbps</span></label>
-          <input type="text" id="up_mbps" placeholder="留空=不限速（默认 BBR）">
-        </div>
-        <div class="row">
-          <label>HY2 下行带宽 Mbps <span class="pill">down_mbps</span></label>
-          <input type="text" id="down_mbps" placeholder="留空=不限速（默认 BBR）">
-        </div>
-        <div class="row">
-          <label>HY2 BBR Profile <span class="pill">bbr_profile</span></label>
-          <select id="bbr_profile">
-            <option value="" selected>默认（单次确认型）</option>
-            <option value="aggressive">aggressive</option>
-            <option value="standard">standard</option>
-            <option value="conservative">conservative</option>
-          </select>
-        </div>
-        <div class="sep"></div>
-        <div class="row">
-          <label>Go GC 策略 <span class="pill">go_gc</span></label>
-          <select id="go_gc">
-            <option value="" selected>默认（GOMEMLIMIT 软上限）</option>
-            <option value="off">off · 关闭 GC 目标（减停顿）</option>
-          </select>
-        </div>
-        <div class="row">
-          <label>内存软上限(MemoryHigh)MB <span class="pill">mem_high_mb</span></label>
-          <input type="text" id="mem_high_mb" placeholder="留空不设，如 512">
-        </div>
-        <div class="row">
-          <label>内存硬上限(MemoryMax)MB <span class="pill">mem_max_mb</span></label>
-          <input type="text" id="mem_max_mb" placeholder="留空不设，如 1024">
-        </div>
-        <div class="row">
           <label>网络内核调优 <span class="pill">net_tune</span></label>
           <select id="net_tune">
-            <option value="" selected>0 · 不启用（默认）</option>
-            <option value="1">1 · BBR+fq+大缓冲（root 生效）</option>
+            <option value="1" selected>1 · BBR+fq+大缓冲（默认开启，root 生效）</option>
+            <option value="0">0 · 关闭</option>
           </select>
         </div>
       </section>
@@ -638,16 +573,8 @@
     strEnv('uuid', 'uuid', envs);
     strEnv('name', 'name', envs);
     strEnv('passwd', 'passwd', envs);
-    // 全局调优（P4 日志 / P2 TFO / P1 不限速 / P5 GC+内存+调优）——留空不发送
-    if (val('tcp_fast_open') === '0') envs.push(['tcp_fast_open', "'0'"]);
-    if (val('log_level') === 'info' || val('log_level') === 'debug') envs.push(['log_level', "'" + val('log_level') + "'"]);
-    strEnv('up_mbps', 'up_mbps', envs);
-    strEnv('down_mbps', 'down_mbps', envs);
-    if (val('bbr_profile')) envs.push(['bbr_profile', "'" + val('bbr_profile') + "'"]);
-    if (val('go_gc') === 'off') envs.push(['go_gc', "'off'"]);
-    strEnv('mem_high_mb', 'mem_high_mb', envs);
-    strEnv('mem_max_mb', 'mem_max_mb', envs);
-    if (val('net_tune') === '1') envs.push(['net_tune', "'1'"]);
+    // 网络内核调优：默认开启（值=1），仅显式选 0 时下发关闭
+    if (val('net_tune') === '0') envs.push(['net_tune', "'0'"]);
     // SNI 与 WS
     strEnv('vl_sni', 'vl_sni', envs);
     // WS-TLS（仅 CDN 中转，ws_cdn 设计 v0.3.0）：仅在启用 wspt 时下发
@@ -660,12 +587,6 @@
     strEnv('tu_sni', 'tu_sni', envs);
     strEnv('any_sni', 'any_sni', envs);
     strEnv('hy_sni', 'hy_sni', envs);
-    // 证书
-    if (val('cert') === 'custom') {
-      envs.push(['cert', "'custom'"]);
-      strEnv('cert_path', 'cert_path', envs);
-      strEnv('key_path', 'key_path', envs);
-    }
     // Argo 固定隧道
     strEnv('agn', 'agn', envs);
     strEnv('agk', 'agk', envs);
@@ -684,11 +605,6 @@
     var on = val('argo') === 'vlpt';
     $id('argo_pt').disabled = !on;
   }
-  function syncCert() {
-    var custom = val('cert') === 'custom';
-    $id('cert_path').disabled = !custom;
-    $id('key_path').disabled = !custom;
-  }
   function syncForm() {
     var form = val('cmd-form') || 'install';
     $id('dl').disabled = form === 'sbm';
@@ -697,7 +613,7 @@
 
   /* ---------------- 事件绑定 ---------------- */
   document.addEventListener('input', function () { regen(); });
-  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); regen(); });
+  document.addEventListener('change', function () { syncArgo(); syncForm(); regen(); });
 
   $id('gen-uuid').addEventListener('click', function () { $id('uuid').value = genUuid(); regen(); });
   $id('gen-passwd').addEventListener('click', function () { $id('passwd').value = genPassword(); regen(); });

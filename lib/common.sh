@@ -657,8 +657,10 @@ ensure_tls_material() {
     san="DNS:${domain}"
   fi
 
+  # 自签证书有效期 99 年（99×365=36135 天），配合证书指纹固定（pcs），
+  # 避免客户端的证书过期告警与频繁重建。
   local extfile=""
-  if ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+  if ! openssl req -x509 -newkey rsa:2048 -nodes -days 36135 \
     -keyout "$key_file" \
     -out "$cert_file" \
     -subj "/CN=${domain}" \
@@ -666,7 +668,7 @@ ensure_tls_material() {
     # -addext 不受支持时改用 -extfile（OpenSSL 1.0+ 均可用），仍保留 SAN
     extfile="$(mktemp "${CERT_DIR}/.ext.XXXXXX")"
     printf 'subjectAltName=%s\n' "${san}" >"${extfile}"
-    if ! openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -days 36135 \
       -keyout "$key_file" \
       -out "$cert_file" \
       -subj "/CN=${domain}" \
@@ -862,12 +864,13 @@ go_gc_requested() {
   return 1
 }
 
-# 可选网络内核调优（net_tune=1 时启用）：BBR + fq + 增大收发缓冲，仅 root+sysctl 生效
+# 网络内核调优（BBR + fq + 增大收发缓冲）：默认启用（v1.1.1 起），
+# 仅 root + sysctl 生效；net_tune=0/off/no 可显式关闭。
 # 支持 install 环境变量瞬时值，或持久化于 settings.json 的全局值（rep/重启后仍生效）
 net_tune_requested() {
   case "$(manager_env_or_setting "net_tune")" in
-  1 | on | yes) return 0 ;;
-  *) return 1 ;;
+  0 | off | no) return 1 ;;
+  *) return 0 ;;
   esac
 }
 
