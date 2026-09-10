@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="1.1.0"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -459,11 +459,29 @@ install_cloudflared_bin() {
 
 create_systemd_units() {
   local mem_line=""
-  local mem_limit
+  local mem_limit gogc_line memory_high_line memory_max_line nofile_line
+  local mem_high mem_max
   mem_limit="$(go_mem_limit_value)"
   if [ -n "${mem_limit}" ]; then
     mem_line="Environment=GOMEMLIMIT=${mem_limit}"
   fi
+  # P5：GOGC=off 彻底关闭逃逸堆目标（可选）；MemoryHigh/MemoryMax 软硬内存上限（可选）
+  gogc_line=""
+  if go_gc_requested; then
+    gogc_line="Environment=GOGC=off"
+  fi
+  mem_high="$(manager_env_or_setting "mem_high_mb")"
+  mem_max="$(manager_env_or_setting "mem_max_mb")"
+  memory_high_line=""
+  memory_max_line=""
+  if [ -n "${mem_high}" ] && [[ "${mem_high}" =~ ^[0-9]+$ ]] && [ "${mem_high}" -gt 0 ]; then
+    memory_high_line="MemoryHigh=${mem_high}M"
+  fi
+  if [ -n "${mem_max}" ] && [[ "${mem_max}" =~ ^[0-9]+$ ]] && [ "${mem_max}" -gt 0 ]; then
+    memory_max_line="MemoryMax=${mem_max}M"
+  fi
+  # P2：放宽文件描述符上限，适配高连接数
+  nofile_line="LimitNOFILE=1048576"
 
   cat >"${SYSTEMD_SERVICE_FILE}" <<EOF
 [Unit]
@@ -477,6 +495,10 @@ WorkingDirectory=${BASE_DIR}
 ExecStartPre=/bin/mkdir -p ${BASE_DIR}/logs ${RUNTIME_DIR}
 ExecStartPre=${SINGBOX_BIN} check -c ${CONFIG_FILE}
 ${mem_line}
+${gogc_line}
+${memory_high_line}
+${memory_max_line}
+${nofile_line}
 ExecStart=${SINGBOX_BIN} run -c ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=3
@@ -542,11 +564,16 @@ EOF
 }
 
 create_openrc_units() {
-  local mem_line=""
+  local mem_line gogc_line
   local mem_limit
+  mem_line=""
+  gogc_line=""
   mem_limit="$(go_mem_limit_value)"
   if [ -n "${mem_limit}" ]; then
     mem_line="export GOMEMLIMIT=${mem_limit}"
+  fi
+  if go_gc_requested; then
+    gogc_line="export GOGC=off"
   fi
 
   cat >"${OPENRC_SERVICE_FILE}" <<EOF
@@ -567,6 +594,7 @@ start_pre() {
   mkdir -p ${BASE_DIR}/logs ${RUNTIME_DIR}
   ${SINGBOX_BIN} check -c ${CONFIG_FILE} >/dev/null
   ${mem_line}
+  ${gogc_line}
 }
 EOF
 
@@ -665,9 +693,16 @@ start_service() {
     rc-service "${SERVICE_NAME}" restart >/dev/null 2>&1 || rc-service "${SERVICE_NAME}" start >/dev/null 2>&1
   else
     stop_service
+    local env_prefix=()
     if [ -n "${mem_limit}" ]; then
-      # GOMEMLIMIT 软上限防 OOM（接近上限时 Go 运行时自动加速 GC）
-      nohup env GOMEMLIMIT="${mem_limit}" "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${BASE_DIR}/logs/sing-box.log" 2>&1 &
+      env_prefix+=(GOMEMLIMIT="${mem_limit}")
+    fi
+    # P5：可选 GOGC=off（彻底关闭逃逸堆目标，适合希望避免频繁 GC 的场景）
+    if go_gc_requested; then
+      env_prefix+=(GOGC="off")
+    fi
+    if [ "${#env_prefix[@]}" -gt 0 ]; then
+      nohup env "${env_prefix[@]}" "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${BASE_DIR}/logs/sing-box.log" 2>&1 &
     else
       nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${BASE_DIR}/logs/sing-box.log" 2>&1 &
     fi
@@ -687,6 +722,7 @@ install_core() {
   install_cloudflared_bin
   ensure_low_memory_guard
   render_config
+  apply_network_tune
   if [ "${has_systemd}" = true ]; then
     create_systemd_units
   elif [ "${has_openrc}" = true ]; then
@@ -933,9 +969,16 @@ render_config() {
   fi
 
   tmp="$(mktemp "${BASE_DIR}/.config.XXXXXX")"
-  if ! jq -n --arg log_path "${BASE_DIR}/logs/sing-box.log" --argjson inbounds "${inbounds_json}" '{
+  # 数据面日志等级可调（warn/info/debug），生产默认 warn 降低高负载磁盘 IO
+  local log_level
+  log_level="$(env_var "log_level")"
+  case "${log_level}" in
+  "info" | "debug") : ;;
+  *) log_level="warn" ;;
+  esac
+  if ! jq -n --arg log_path "${BASE_DIR}/logs/sing-box.log" --arg log_level "${log_level}" --argjson inbounds "${inbounds_json}" '{
     log: {
-      level: "info",
+      level: $log_level,
       timestamp: true,
       output: $log_path
     },
@@ -952,6 +995,12 @@ render_config() {
     print_err "写入 sing-box 配置失败。"
     return 1
   fi
+  # S4：落盘前用 sing-box 校验 tmp，失败则删除 tmp、保留旧配置并报错（fail-closed）
+  if [ -n "${SINGBOX_BIN:-}" ] && [ -x "${SINGBOX_BIN}" ] && ! "${SINGBOX_BIN}" check -c "${tmp}" >/dev/null 2>&1; then
+    rm -f "${tmp}"
+    print_err "sing-box check 失败，已拒绝覆盖现有配置（旧配置保留）。"
+    return 1
+  fi
   if ! chmod 600 "${tmp}" || ! mv "${tmp}" "${CONFIG_FILE}"; then
     rm -f "${tmp}"
     print_err "保存 sing-box 配置失败。"
@@ -959,13 +1008,22 @@ render_config() {
   fi
 }
 
-render_inbound_for_tag() {
+express_restart() { :; }
+  jq_eno() { :; }
+  render_inbound_for_tag() {
   local tag="$1"
-  local protocol name port uuid password cert_file key_file ws_path reality_server
+  local protocol name port uuid password cert_file key_file ws_path reality_server tcp_fast_open
+  local up_mbps down_mbps bbr_profile
+  local __tfo
 
   protocol="$(node_value "$tag" "protocol")"
   name="$(node_value "$tag" "name")"
   port="$(node_value "$tag" "port")"
+  # 全局 TCP Fast Open（默认开启，1.14.0 各 TCP 入站均支持）
+  case "$(env_var "tcp_fast_open")" in
+  "" | 1) __tfo=true ;;
+  *) __tfo=false ;;
+  esac
 
   case "$protocol" in
   vless-reality)
@@ -978,11 +1036,13 @@ render_inbound_for_tag() {
       --arg server "$reality_server" \
       --arg private_key "$(secret_value "$tag" "private_key")" \
       --arg short_id "$(node_value "$tag" "short_id")" \
-      --argjson port "$port" '{
+      --argjson port "$port" \
+      --argjson tfo "${__tfo}" '{
           type: "vless",
           tag: $tag,
           listen: "::",
           listen_port: $port,
+          tcp_fast_open: $tfo,
           users: [{ name: $name, uuid: $uuid, flow: "xtls-rprx-vision" }],
           tls: {
             enabled: true,
@@ -1008,18 +1068,20 @@ render_inbound_for_tag() {
       --arg ws_path "$ws_path" \
       --arg cert_file "$cert_file" \
       --arg key_file "$key_file" \
-      --argjson port "$port" '{
+      --argjson port "$port" \
+      --argjson tfo "${__tfo}" '{
           type: "vless",
           tag: $tag,
           listen: "::",
           listen_port: $port,
+          tcp_fast_open: $tfo,
           users: [{ name: $name, uuid: $uuid }],
           tls: {
             enabled: true,
             certificate_path: $cert_file,
             key_path: $key_file
           },
-          transport: { type: "ws", path: $ws_path }
+          transport: { type: "ws", path: $ws_path, max_early_data: 2048, early_data_header_name: "Sec-WebSocket-Protocol" }
         }'
     ;;
   anytls)
@@ -1032,11 +1094,13 @@ render_inbound_for_tag() {
       --arg password "$password" \
       --arg cert_file "$cert_file" \
       --arg key_file "$key_file" \
-      --argjson port "$port" '{
+      --argjson port "$port" \
+      --argjson tfo "${__tfo}" '{
           type: "anytls",
           tag: $tag,
           listen: "::",
           listen_port: $port,
+          tcp_fast_open: $tfo,
           users: [{ name: $name, password: $password }],
           tls: {
             enabled: true,
@@ -1053,13 +1117,15 @@ render_inbound_for_tag() {
       --arg name "$name" \
       --arg uuid "$uuid" \
       --arg ws_path "$ws_path" \
-      --argjson port "$port" '{
+      --argjson port "$port" \
+      --argjson tfo "${__tfo}" '{
           type: "vless",
           tag: $tag,
           listen: "127.0.0.1",
           listen_port: $port,
+          tcp_fast_open: $tfo,
           users: [{ name: $name, uuid: $uuid }],
-          transport: { type: "ws", path: $ws_path }
+          transport: { type: "ws", path: $ws_path, max_early_data: 2048, early_data_header_name: "Sec-WebSocket-Protocol" }
         }'
     ;;
   tuic-v5)
@@ -1095,43 +1161,54 @@ render_inbound_for_tag() {
     password="$(secret_value "$tag" "password")"
     cert_file="$(node_value "$tag" "certificate_path")"
     key_file="$(node_value "$tag" "key_path")"
-    local up_mbps down_mbps
+    local up_mbps down_mbps bbr_profile
     up_mbps="$(node_value "$tag" "up_mbps")"
     down_mbps="$(node_value "$tag" "down_mbps")"
+    # 全局 bbr_profile：aggressive|standard|conservative（sing-box 1.14.0+），空=默认
+    bbr_profile="$(env_var "bbr_profile")"
+    case "${bbr_profile}" in
+    aggressive | standard | conservative) : ;;
+    *) bbr_profile="" ;;
+    esac
+    # 默认不限速（省略上下行带宽字段则客户端启用 BBR、不被限速）
     jq -n \
       --arg tag "$tag" \
       --arg name "$name" \
       --arg password "$password" \
       --arg cert_file "$cert_file" \
       --arg key_file "$key_file" \
-      --argjson up_mbps "${up_mbps:-200}" \
-      --argjson down_mbps "${down_mbps:-200}" \
+      --argjson up_mbps "${up_mbps:-0}" \
+      --argjson down_mbps "${down_mbps:-0}" \
+      --arg bbr_profile "${bbr_profile}" \
       --argjson port "$port" '{
           type: "hysteria2",
           tag: $tag,
           listen: "::",
           listen_port: $port,
           users: [{ name: $name, password: $password }],
-          up_mbps: $up_mbps,
-          down_mbps: $down_mbps,
           tls: {
             enabled: true,
             alpn: ["h3"],
             certificate_path: $cert_file,
             key_path: $key_file
           }
-        }'
+        }
+        + (if ($up_mbps > 0) then { up_mbps: $up_mbps } else {} end)
+        + (if ($down_mbps > 0) then { down_mbps: $down_mbps } else {} end)
+        + (if ($bbr_profile != "") then { bbr_profile: $bbr_profile } else {} end)'
     ;;
   socks5)
     jq -n \
       --arg tag "$tag" \
       --arg username "$(node_value "$tag" "username")" \
       --arg password "$(secret_value "$tag" "password")" \
-      --argjson port "$port" '{
+      --argjson port "$port" \
+      --argjson tfo "${__tfo}" '{
           type: "socks",
           tag: $tag,
           listen: "::",
           listen_port: $port,
+          tcp_fast_open: $tfo,
           users: [{ username: $username, password: $password }]
         }'
     ;;
@@ -1472,8 +1549,8 @@ add_hy2() {
   password="$(prompt_optional_value "密码（留空自动生成）")"
   password="${password:-$(generate_hex 8)}"
   tls_server="$(prompt_safe_domain "SNI 域名" "${DEFAULT_TLS_SERVER}")"
-  up_mbps="$(prompt_positive_integer "上行带宽 Mbps" 200)"
-  down_mbps="$(prompt_positive_integer "下行带宽 Mbps" 200)"
+  up_mbps="$(prompt_optional_value "上行带宽 Mbps（留空=不限速，默认 BBR）")"
+  down_mbps="$(prompt_optional_value "下行带宽 Mbps（留空=不限速，默认 BBR）")"
   cert_bundle="$(prompt_certificate_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1485,8 +1562,8 @@ add_hy2() {
     --arg name "$name" \
     --argjson port "$port" \
     --arg tls_server "$tls_server" \
-    --argjson up_mbps "$up_mbps" \
-    --argjson down_mbps "$down_mbps" \
+    --argjson up_mbps "${up_mbps:-0}" \
+    --argjson down_mbps "${down_mbps:-0}" \
     --arg certificate_mode "$cert_mode" \
     --arg certificate_path "$cert_file" \
     --arg key_path "$key_file" '{
@@ -1494,12 +1571,12 @@ add_hy2() {
       name: $name,
       port: $port,
       tls_server: $tls_server,
-      up_mbps: $up_mbps,
-      down_mbps: $down_mbps,
       certificate_mode: $certificate_mode,
       certificate_path: $certificate_path,
       key_path: $key_path
-    }')"
+    }
+    + (if ($up_mbps > 0) then { up_mbps: $up_mbps } else {} end)
+    + (if ($down_mbps > 0) then { down_mbps: $down_mbps } else {} end)')"
 
   secret_json="$(jq -n --arg password "$password" '{ password: $password }')"
 
@@ -1911,8 +1988,15 @@ auto_add_hy2() {
   password="${ENV_PASSWD:-$(generate_hex 8)}"
   tls_server="${ENV_HY_SNI:-${DEFAULT_TLS_SERVER}}"
   # 局部名不用 up_mbps/down_mbps，避免遮蔽同名用户环境变量导致读取为空
-  __hy_up="$(auto_positive_or_default "up_mbps" 200)"
-  __hy_down="$(auto_positive_or_default "down_mbps" 200)"
+  # 留空=不限速（客户端 BBR 可用）；只填其一则另一个独立成单方向限速
+  __hy_up="$(env_var "up_mbps")"
+  __hy_down="$(env_var "down_mbps")"
+  case "${__hy_up}" in
+  *[!0-9]* | "") __hy_up="0" ;;
+  esac
+  case "${__hy_down}" in
+  *[!0-9]* | "") __hy_down="0" ;;
+  esac
   cert_bundle="$(auto_cert_bundle "$tag" "$tls_server")"
   cert_mode="${cert_bundle%%|*}"
   cert_file="${cert_bundle#*|}"
@@ -1933,12 +2017,12 @@ auto_add_hy2() {
       name: $name,
       port: $port,
       tls_server: $tls_server,
-      up_mbps: $up_mbps,
-      down_mbps: $down_mbps,
       certificate_mode: $certificate_mode,
       certificate_path: $certificate_path,
       key_path: $key_path
-    }')"
+    }
+    + (if ($up_mbps > 0) then { up_mbps: $up_mbps } else {} end)
+    + (if ($down_mbps > 0) then { down_mbps: $down_mbps } else {} end)')"
 
   secret_json="$(jq -n --arg password "$password" '{ password: $password }')"
 
@@ -2106,6 +2190,16 @@ auto_install() {
   fi
   ENV_SOCKS5_USER="$(env_var "socks5_username")"
   ENV_SOCKS5_PASS="$(env_var "socks5_password")"
+
+  # P5/S3：持久化性能与调优参数（go_gc / net_tune / 内存上限），使 rep、重启、
+  # watchdog 等后续流程在无 install 环境变量时也能读取同一套全局配置。
+  local _key _val
+  for _key in go_gc net_tune mem_high_mb mem_max_mb; do
+    _val="$(env_var "$_key")"
+    if [ -n "${_val}" ]; then
+      set_setting "$_key" "$_val"
+    fi
+  done
 
   for line in "${specs[@]}"; do
     port="${line##* }"

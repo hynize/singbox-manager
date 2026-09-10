@@ -311,6 +311,55 @@ json_set_record "${NODES_FILE}" "nws-cdn0" '{"protocol":"vless-ws-tls","name":"W
 json_set_record "${SECRETS_FILE}" "nws-cdn0" '{"uuid":"uwsc0"}'
 assert_eval_true "WS CDN 无 cdn_sni 时回退连接地址" 'build_share_link nws-cdn0 | grep -q "sni=cdn.example.com&type=ws&host=cdn.example.com"'
 
+# --- v1.1.0：性能/稳定性（TCP Fast Open / HY2 不限速 / GOGC / 退避 / 探活） ---
+json_set_record "${NODES_FILE}" "nhyu" '{"protocol":"hy2","name":"HY2-UNLIM","port":11445,"tls_server":"www.bing.com","certificate_mode":"self-signed"}'
+json_set_record "${SECRETS_FILE}" "nhyu" '{"password":"pw"}'
+json_set_record "${NODES_FILE}" "nws-tune" '{"protocol":"vless-ws-tls","name":"WS-Tune","port":20840,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/e","certificate_mode":"custom","certificate_path":"cert"}'
+json_set_record "${SECRETS_FILE}" "nws-tune" '{"uuid":"ut"}'
+
+# P2/P3：渲染单 outbound 直接校验（写 stdout，不依赖 CONFIG_FILE）
+tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
+( tcp_fast_open=0 render_inbound_for_tag nws-tune ) >"${tmpcfg}" 2>/dev/null
+assert_eval_true "tcp_fast_open=false 渲染进 inbound" 'jq -e ".tcp_fast_open == false" "${tmpcfg}" >/dev/null'
+( tcp_fast_open=1 render_inbound_for_tag nws-tune ) >"${tmpcfg}" 2>/dev/null
+assert_eval_true "tcp_fast_open=true 渲染进 inbound" 'jq -e ".tcp_fast_open == true" "${tmpcfg}" >/dev/null'
+assert_eval_true "WS inbound 带 0-RTT early data 字段" 'jq -e ".transport.max_early_data == 2048 and .transport.early_data_header_name == \"Sec-WebSocket-Protocol\"" "${tmpcfg}" >/dev/null'
+rm -f "${tmpcfg}"
+
+# P1：HY2 无 up/down 字段 -> 渲染时省略 -> 不限速（客户端 BBR 可用）
+tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
+render_inbound_for_tag nhyu >"${tmpcfg}" 2>/dev/null
+assert_eval_false "HY2 不限速时不写 up_mbps" 'jq -e ".up_mbps" "${tmpcfg}" >/dev/null'
+assert_eval_false "HY2 不限速时不写 down_mbps" 'jq -e ".down_mbps" "${tmpcfg}" >/dev/null'
+rm -f "${tmpcfg}"
+
+# P1：填写带宽时仍正确写入（含 0-RTT WS 渲染）
+json_set_record "${NODES_FILE}" "nhyu" '{"protocol":"hy2","name":"HY2-UNLIM","port":11445,"tls_server":"www.bing.com","certificate_mode":"self-signed","up_mbps":400,"down_mbps":800}'
+tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
+render_inbound_for_tag nhyu >"${tmpcfg}" 2>/dev/null
+assert_eval_true "HY2 限速时写 up_mbps=400" 'jq -e ".up_mbps == 400" "${tmpcfg}" >/dev/null'
+assert_eval_true "HY2 限速时写 down_mbps=800" 'jq -e ".down_mbps == 800" "${tmpcfg}" >/dev/null'
+rm -f "${tmpcfg}"
+
+# S2：崩溃退避纯函数
+assert_eq "退避 delay 第1次" "1" "$(argo_backoff_delay 1)"
+assert_eq "退避 delay 第2次" "2" "$(argo_backoff_delay 2)"
+assert_eq "退避 delay 第3次" "4" "$(argo_backoff_delay 3)"
+assert_eq "退避 delay 上限30min" "1800" "$(argo_backoff_delay 20)"
+assert_eq "restart_count 初始 0" "0" "$(read_restart_count ntest)"
+assert_eval_true "bump_restart_count 自增" '( bump_restart_count ntest; [ "$(read_restart_count ntest)" = "1" ] )'
+assert_eval_true "reset_restart_count 清零" '( reset_restart_count ntest; [ "$(read_restart_count ntest)" = "0" ] )'
+rm -f "${RUNTIME_DIR}/ntest.restart_count"
+
+# S1：端口探活纯探测函数（本机未监听某高端口 -> 失败）
+assert_eval_false "probe_tcp_port 未监听端口失败" 'probe_tcp_port 127.0.0.1 65123 1'
+
+# P5：GOGC 开关 / 内存上限解析 / 网络调优开关
+assert_eval_false "go_gc 默认不启用" 'go_gc_requested'
+assert_eval_true "go_gc=off 启用" '( go_gc=off; go_gc_requested )'
+assert_eval_false "net_tune 默认不启用" 'net_tune_requested'
+assert_eval_true "net_tune=1 启用" '( net_tune=1; net_tune_requested )'
+
 # --- 端到端前置：清空状态 ---
 wipe_records
 assert_eq "端到端前置清空" "0" "$(jq length "${NODES_FILE}")"
@@ -356,7 +405,18 @@ assert_eval_true "HY2 inbound 带宽生效" 'jq -e ".inbounds[] | select(.type =
 assert_eval_true "WS inbound 路径生效" 'jq -e ".inbounds[] | select(.transport.path == \"/wspath\")" "${CONFIG_FILE}" >/dev/null'
 assert_eval_true "SOCKS5 inbound 用户生效" 'jq -e ".inbounds[] | select(.type == \"socks\" and .users[0].username == \"u1\")" "${CONFIG_FILE}" >/dev/null'
 assert_eval_true "vless 使用指定 uuid" 'jq -e ".inbounds[].users[]? | select(.uuid == \"11111111-2222-3333-4444-555555555555\")" "${CONFIG_FILE}" >/dev/null'
+assert_eq "config 日志级别默认 warn" "warn" "$(jq -r '.log.level' "${CONFIG_FILE}")"
+assert_eval_true "vless TFO 默认开" 'jq -e ".inbounds[] | select(.type == \"vless\" and .tcp_fast_open == true)" "${CONFIG_FILE}" >/dev/null'
+assert_eval_true "anytls TFO 默认开" 'jq -e ".inbounds[] | select(.type == \"anytls\" and .tcp_fast_open == true)" "${CONFIG_FILE}" >/dev/null'
+assert_eval_true "socks TFO 默认开" 'jq -e ".inbounds[] | select(.type == \"socks\" and .tcp_fast_open == true)" "${CONFIG_FILE}" >/dev/null'
+assert_eval_true "WS inbound 全局带 0-RTT" 'jq -e ".inbounds[] | select(.transport.type? == \"ws\" and .transport.max_early_data == 2048 and .transport.early_data_header_name == \"Sec-WebSocket-Protocol\")" "${CONFIG_FILE}" >/dev/null'
+assert_eval_true "HY2 限速 100/300 写入" 'jq -e ".inbounds[] | select(.type == \"hysteria2\" and .up_mbps == 100 and .down_mbps == 300)" "${CONFIG_FILE}" >/dev/null'
 assert_eval_true "sing-box stub 已启动" 'pid="$(read_pid_file "${PID_FILE}")"; [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null'
+
+# S4：sing-box check 失败时拒写配置（fail-closed，保留旧配置）
+cp "${CONFIG_FILE}" "${TEST_ROOT}/config.before"
+assert_eval_false "check 失败 render_config 拒写" '( SINGBOX_BIN="/bin/false"; render_config )'
+assert_eval_true "check 失败保留旧配置" 'cmp -s "${CONFIG_FILE}" "${TEST_ROOT}/config.before"'
 
 # sbm sub：base64 订阅输出（6 节点）
 assert_eval_true "sub 输出非空 base64" 'c="$(sub_command)"; [ "${#c}" -gt 100 ] && [[ "${c}" =~ ^[A-Za-z0-9+/=]+$ ]]'

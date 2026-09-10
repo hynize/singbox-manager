@@ -46,8 +46,16 @@ start_non_systemd_singbox() {
   rotate_log_file "${LOG_DIR}/sing-box.log" || true
   local mem_limit
   mem_limit="$(go_mem_limit_value)"
+  local env_prefix=()
   if [ -n "${mem_limit}" ]; then
-    nohup env GOMEMLIMIT="${mem_limit}" "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${LOG_DIR}/sing-box.log" 2>&1 &
+    env_prefix+=(GOMEMLIMIT="${mem_limit}")
+  fi
+  # P5：GOGC=off 在 standalone（无 systemd/openrc）场景同样生效
+  if go_gc_requested; then
+    env_prefix+=(GOGC="off")
+  fi
+  if [ "${#env_prefix[@]}" -gt 0 ]; then
+    nohup env "${env_prefix[@]}" "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${LOG_DIR}/sing-box.log" 2>&1 &
   else
     nohup "${SINGBOX_BIN}" run -c "${CONFIG_FILE}" >>"${LOG_DIR}/sing-box.log" 2>&1 &
   fi
@@ -85,10 +93,35 @@ ensure_singbox() {
   fi
 
   local pid
+  local probe_fail_file probe_fail probe_fail_limit
   pid="$(read_pid_file "${PID_FILE}" 2>/dev/null || true)"
   # 存活且（/proc 可用时）确为 sing-box 实例才认为健康，防止 PID 复用导致漏重启
   if [ -n "${pid}" ] && pid_matches_binary_or_alive "${pid}" "${SINGBOX_BIN}"; then
-    return 0
+    # S1：进程存活但所有节点端口均不可探测（数据面无响应）时视为假死，按失败计数重启
+    if [ -f "${NODES_FILE}" ] && any_node_port_alive; then
+      rm -f "${RUNTIME_DIR}/probe_fail_count"
+      return 0
+    fi
+    if [ -f "${NODES_FILE}" ]; then
+      local probe_fail
+      probe_fail_file="${RUNTIME_DIR}/probe_fail_count"
+      if [ -f "${probe_fail_file}" ]; then
+        probe_fail="$(cat "${probe_fail_file}" 2>/dev/null | tr -dc '0-9' || true)"
+      fi
+      probe_fail="${probe_fail:-0}"
+      probe_fail=$((probe_fail + 1))
+      printf '%s' "${probe_fail}" >"${probe_fail_file}"
+      chmod 600 "${probe_fail_file}"
+      probe_fail_limit="${SBM_PROBE_FAIL_LIMIT:-3}"
+      if [ "${probe_fail}" -lt "${probe_fail_limit}" ]; then
+        print_warn "sing-box 端口探活失败 ${probe_fail}/${probe_fail_limit} 次，跳过本轮重启。"
+        return 0
+      fi
+      rm -f "${probe_fail_file}"
+      print_warn "sing-box 连续 ${probe_fail} 次探活失败，判定假死，强制重启。"
+    else
+      return 0
+    fi
   fi
 
   rm -f "${PID_FILE}"
@@ -172,6 +205,7 @@ start_token_tunnel() {
 
 ensure_argo_nodes() {
   local tag protocol mode pid_file pid
+  local restarts last_restart now backoff restart_at_file
   [ -f "${NODES_FILE}" ] || return 0
   [ -x "${CLOUDFLARED_BIN}" ] || return 0
 
@@ -184,16 +218,41 @@ ensure_argo_nodes() {
     pid="$(read_pid_file "${pid_file}" 2>/dev/null || true)"
     # 存活且（/proc 可用时）确为 cloudflared 实例才跳过重启，防止 PID 复用漏拉起
     if [ -n "${pid}" ] && pid_matches_binary_or_alive "${pid}" "${CLOUDFLARED_BIN}"; then
+      # 隧道长时间稳定运行：清零崩溃计数，避免旧失败影响后续退避
+      reset_restart_count "${tag}"
       continue
+    fi
+
+    # S2：崩溃退避——按 2^(n-1) 秒退避（封顶 30min），防止崩溃循环秒级重启风暴
+    restarts="$(read_restart_count "$tag")"
+    if [ "${restarts}" -gt 0 ]; then
+      backoff="$(argo_backoff_delay "${restarts}")"
+      restart_at_file="${RUNTIME_DIR}/${tag}.restart_at"
+      if [ -f "${restart_at_file}" ]; then
+        last_restart="$(cat "${restart_at_file}" 2>/dev/null | tr -dc '0-9' | head -c 12 || true)"
+        last_restart="${last_restart:-0}"
+        now="$(date +%s 2>/dev/null || echo 0)"
+        if [ -n "${now}" ] && [ $((now - last_restart)) -lt "${backoff}" ]; then
+          print_warn "节点 ${tag} 处于退避窗口（第 ${restarts} 次崩溃，${backoff}s 内不再重启）。"
+          continue
+        fi
+      fi
     fi
 
     rm -f "${pid_file}"
     mode="$(node_value "$tag" "argo_mode")"
     if [ "${mode}" = "token" ]; then
-      start_token_tunnel "${tag}" || true
+      if start_token_tunnel "${tag}"; then
+        bump_restart_count "${tag}"
+        date +%s >"${RUNTIME_DIR}/${tag}.restart_at" 2>/dev/null || true
+      fi
     else
       release_lock
-      start_temp_tunnel "${tag}" || true
+      if start_temp_tunnel "${tag}"; then
+        # 临时隧道启动即记录，成功与否由下轮域名核验/进程存活清空计数
+        bump_restart_count "${tag}"
+        date +%s >"${RUNTIME_DIR}/${tag}.restart_at" 2>/dev/null || true
+      fi
       try_acquire_lock || true
     fi
   done < <(iter_node_tags)
@@ -209,6 +268,7 @@ if ! try_acquire_lock; then
 fi
 ensure_log_rotation
 reconcile_state || true
+apply_network_tune
 ensure_singbox
 ensure_argo_nodes
 sanitize_permissions

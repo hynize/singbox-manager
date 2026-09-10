@@ -517,6 +517,28 @@ get_setting() {
   printf '%s' "${value:-${default}}"
 }
 
+# 读取同名环境变量并去掉首尾空白/控制字符；sb.sh 亦定义同名函数，此处保证
+# watchdog/standalone 场景（仅 source common.sh）也能使用。
+env_var() {
+  local __env_key="$1"
+  local __env_value="${!__env_key:-}"
+  printf '%s' "$(printf '%s' "${__env_value}" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+}
+
+# 全局调优参数读取：优先瞬时环境变量（install 时），否则回退 settings.json
+# 的持久化值（rep、watchdog、重启后仍生效）。为空时返回默认值。
+manager_env_or_setting() {
+  local _key="$1"
+  local _default="${2:-}"
+  local _v
+  _v="$(env_var "$_key")"
+  if [ -n "${_v}" ]; then
+    printf '%s' "${_v}"
+    return 0
+  fi
+  printf '%s' "$(get_setting "$_key" "$_default")"
+}
+
 set_setting() {
   local key="$1"
   local value="$2"
@@ -765,6 +787,104 @@ wait_for_trycloudflare_domain_verified() {
   done
 
   return 1
+}
+
+# S2：cloudflared 崩溃退避——连续重启太频繁时按 2^(n-1) 上限 30min 等待
+# 计数存 ${RUNTIME_DIR}/${tag}.restart_count，成功运行后由 ensure_argo_nodes 清零
+argo_backoff_delay() {
+  local fail_count="$1"
+  local delay=1 i
+  for ((i = 1; i < fail_count && delay < 1800; i++)); do
+    delay=$((delay * 2))
+  done
+  [ "${delay}" -gt 1800 ] && delay=1800
+  printf '%s' "${delay}"
+}
+
+# 读/写单调递增的崩溃计数文件（幂等：写失败返回非 0）
+read_restart_count() {
+  local tag="$1"
+  local file="${RUNTIME_DIR}/${tag}.restart_count"
+  [ -f "${file}" ] || { printf '0'; return 0; }
+  cat "${file}" 2>/dev/null | tr -dc '0-9' | grep -E '^[0-9]+$' || printf '0'
+}
+
+bump_restart_count() {
+  local tag="$1"
+  local file="${RUNTIME_DIR}/${tag}.restart_count"
+  local current
+  current="$(read_restart_count "$tag")"
+  printf '%s' "$((current + 1))" >"${file}.tmp" && chmod 600 "${file}.tmp" && mv "${file}.tmp" "${file}"
+}
+
+reset_restart_count() {
+  local tag="$1"
+  rm -f "${RUNTIME_DIR}/${tag}.restart_count"
+}
+
+# S1：TCP 端口活性探测。纯 bash /dev/tcp + timeout，超时默认 2 秒。
+# 返回 0 表示端口可连（节点存活）。端口未指定或连接失败返回非 0。
+probe_tcp_port() {
+  local host="$1"
+  local port="${2:-}"
+  local timeout_s="${3:-2}"
+  [ -n "${port}" ] || return 1
+  [[ "${port}" =~ ^[0-9]+$ ]] || return 1
+  if command_exists timeout; then
+    timeout "${timeout_s}" bash -c "exec 3<>/dev/tcp/${host}/${port}" >/dev/null 2>&1
+  else
+    # 环境无 timeout：直接尝试，尽力而为
+    bash -c "exec 3<>/dev/tcp/${host}/${port}" >/dev/null 2>&1
+  fi
+}
+
+# S1：任一节点端口存活即认为 sing-box 数据面正常。
+# node_value 为空或无任何节点时返回非 0（由调用方决定是否重启，避免误杀）。
+any_node_port_alive() {
+  local tag port alive=1
+  [ -f "${NODES_FILE}" ] || return 1
+  while IFS= read -r tag; do
+    [ -n "${tag}" ] || continue
+    port="$(node_value "$tag" "port" 2>/dev/null || true)"
+    [ -n "${port}" ] || continue
+    if probe_tcp_port "127.0.0.1" "${port}" "${SBM_PROBE_TIMEOUT_S:-2}"; then
+      alive=0
+      break
+    fi
+  done < <(iter_node_tags)
+  [ "${alive}" = 0 ] || return 1
+  return 0
+}
+
+# 可选 GOGC=off（关闭 Go 逃逸堆目标，减少 GC 停顿；仅配置 GOGC=off 时启用）
+go_gc_requested() {
+  [ "$(manager_env_or_setting "go_gc")" = "off" ] && return 0
+  return 1
+}
+
+# 可选网络内核调优（net_tune=1 时启用）：BBR + fq + 增大收发缓冲，仅 root+sysctl 生效
+# 支持 install 环境变量瞬时值，或持久化于 settings.json 的全局值（rep/重启后仍生效）
+net_tune_requested() {
+  case "$(manager_env_or_setting "net_tune")" in
+  1 | on | yes) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
+apply_network_tune() {
+  net_tune_requested || return 0
+  [ "$(id -u 2>/dev/null || echo 1)" = "0" ] || return 0
+  command_exists sysctl || return 0
+  command_exists modprobe || true
+
+  sysctl -w net.core.rmem_max=26214400 >/dev/null 2>&1 || true
+  sysctl -w net.core.wmem_max=26214400 >/dev/null 2>&1 || true
+  sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_rmem='4096 87380 26214400' >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_wmem='4096 16384 26214400' >/dev/null 2>&1 || true
+  sysctl -w net.ipv4.tcp_slow_start_after_idle=0 >/dev/null 2>&1 || true
+  print_ok "已应用网络调优：BBR + fq + 大缓冲（仅本次运行生效）。"
 }
 
 has_public_ipv4() {
