@@ -99,7 +99,7 @@
     .row > label { font-size: 14.5px; text-align: left; }
     .ctl { position: relative; display: flex; gap: 8px; align-items: center; }
     .ctl > input, .ctl > select { flex: 1; min-width: 0; }
-    .ctl > select.tight { flex: none; width: 150px; }
+    .ctl > select.tight, .ctl > select.has-hint { flex: 1; min-width: 0; padding-right: 194px; }
     .ctl > button { flex: 0 0 auto; }
     .ctl > input { padding-right: 60px; }
     .ctl > input.has-pick { padding-right: 194px; }
@@ -181,7 +181,7 @@
       font-size: 13.5px; line-height: 1.55;
     }
     .hint { font-size: 12.5px; color: var(--sub); margin: 8px 0 0; }
-    .hint-inline { font-size: 12px; color: var(--sub); white-space: nowrap; flex: 0 0 auto; }
+    .hint-inline { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--sub); white-space: nowrap; pointer-events: none; max-width: 178px; overflow: hidden; text-overflow: ellipsis; }
 
     footer { margin-top: 26px; text-align: center; font-size: 13px; color: var(--sub); line-height: 1.8; }
   </style>
@@ -217,7 +217,7 @@
       </section>
 
       <section class="card">
-        <h2>⑤ SNI 配置 <span class="tip">SNI 留空默认 www.apple.com</span></h2>
+        <h2>③ SNI 配置 <span class="tip">SNI 留空默认 www.apple.com</span></h2>
         <div class="row">
           <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
           <div class="ctl">
@@ -251,7 +251,7 @@
       </section>
 
       <section class="card">
-        <h2>② VLESS+WS+CDN <span class="tip">填写 wspt 端口即启用（CDN 中转）</span></h2>
+        <h2>⑤ VLESS+WS+CDN <span class="tip">填写 wspt 端口即启用（CDN 中转）</span></h2>
         <div class="row">
           <label>VLESS-WS-TLS 端口 <span class="pill">wspt</span></label>
           <input type="text" class="port-input" id="wspt" placeholder="如 8443，或点 🎲 随机" inputmode="numeric">
@@ -302,7 +302,7 @@
 
       <div class="col">
       <section class="card">
-        <h2>④ 全局配置</h2>
+        <h2>② 全局配置</h2>
         <div class="row">
           <label>UUID <span class="pill">uuid</span></label>
           <div class="ctl">
@@ -340,11 +340,11 @@
       </section>
 
       <section class="card">
-        <h2>③ Argo CF 隧道（VLESS + Argo）<span class="tip">默认不启用；与②互相独立</span></h2>
+        <h2>④ Argo CF 隧道（VLESS + Argo）<span class="tip">默认不启用；与⑤互相独立</span></h2>
         <div class="row">
           <label>启用 Argo <span class="pill">argo</span></label>
           <div class="ctl">
-            <select id="argo">
+            <select id="argo" class="has-hint">
               <option value="" selected>不启用 Argo</option>
               <option value="vlpt">启用 Argo（VLESS-WS + Argo）</option>
             </select>
@@ -386,7 +386,7 @@
           <input type="text" id="agk" placeholder="ey 开头字符串或 {…} JSON">
         </div>
         <div class="sep"></div>
-        <p class="note">Argo 客户端连接地址 = 独立优选域名(<span class="pill">argo_cdn_host</span>):<span class="pill">argo_cdn_port</span>，与 ② VLESS+WS+CDN 互不影响、可单独设置。Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。cloudflared 安装遵循强校验：拿不到官方 SHA256 校验值时默认拒绝安装，绝不以版本自报代替完整性校验。</p>
+        <p class="note">Argo 客户端连接地址 = 独立优选域名(<span class="pill">argo_cdn_host</span>):<span class="pill">argo_cdn_port</span>，与 ⑤ VLESS+WS+CDN 互不影响、可单独设置。Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。cloudflared 安装遵循强校验：拿不到官方 SHA256 校验值时默认拒绝安装，绝不以版本自报代替完整性校验。</p>
       </section>
 
       <section class="card">
@@ -570,7 +570,7 @@
     var envs = [];
     // 直连协议端口
     ['vlrt', 'wspt', 'tupt', 'anypt', 'hypt', 'socks5pt'].forEach(function (k) { numEnv(k, k, envs); });
-    // Argo（③ 启用开关=vlpt 时才带上；argo_cdn_host/argo_cdn_port 独立于 WS-CDN）
+    // Argo（④ 启用开关=vlpt 时才带上；argo_cdn_host/argo_cdn_port 独立于 WS-CDN）
     if (val('argo') === 'vlpt') {
       numEnv('argo_pt', 'argo_pt', envs);
       envs.push(['argo', "'vlpt'"]);
