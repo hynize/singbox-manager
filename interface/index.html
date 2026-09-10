@@ -97,8 +97,9 @@
     .row { display: grid; grid-template-columns: 205px 1fr; gap: 10px; align-items: center; margin: 10px 0; }
     @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
     .row > label { font-size: 14.5px; text-align: left; }
-    .ctl { position: relative; display: flex; gap: 8px; }
+    .ctl { position: relative; display: flex; gap: 8px; align-items: center; }
     .ctl > input, .ctl > select { flex: 1; min-width: 0; }
+    .ctl > select.tight { flex: none; width: 150px; }
     .ctl > button { flex: 0 0 auto; }
     .ctl > input { padding-right: 60px; }
     .ctl > input.has-pick { padding-right: 194px; }
@@ -180,7 +181,7 @@
       font-size: 13.5px; line-height: 1.55;
     }
     .hint { font-size: 12.5px; color: var(--sub); margin: 8px 0 0; }
-    .hint-inline { font-size: 12px; color: var(--sub); white-space: nowrap; }
+    .hint-inline { font-size: 12px; color: var(--sub); white-space: nowrap; flex: 0 0 auto; }
 
     footer { margin-top: 26px; text-align: center; font-size: 13px; color: var(--sub); line-height: 1.8; }
   </style>
@@ -216,6 +217,40 @@
       </section>
 
       <section class="card">
+        <h2>⑤ SNI 配置 <span class="tip">SNI 留空默认 www.apple.com</span></h2>
+        <div class="row">
+          <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="vl_sni" class="has-pick" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="vl_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="row">
+          <label>TUIC SNI <span class="pill">tu_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="tu_sni" class="has-pick" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="tu_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <label>AnyTLS SNI <span class="pill">any_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="any_sni" class="has-pick" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="any_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <div class="row">
+          <label>Hysteria2 SNI <span class="pill">hy_sni</span></label>
+          <div class="ctl">
+            <input type="text" id="hy_sni" class="has-pick" placeholder="留空默认 www.apple.com">
+            <select class="pick sni-pick" data-target="hy_sni"><option value="">选择…</option></select>
+          </div>
+        </div>
+        <p class="note"><b>SNI 安全提示：</b>不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空（内置默认值）。</p>
+      </section>
+
+      <section class="card">
         <h2>② VLESS+WS+CDN <span class="tip">填写 wspt 端口即启用（CDN 中转）</span></h2>
         <div class="row">
           <label>VLESS-WS-TLS 端口 <span class="pill">wspt</span></label>
@@ -231,7 +266,7 @@
         <div class="row">
           <label>CDN 转发端口 <span class="pill">cdn_port</span></label>
           <div class="ctl">
-            <select id="cdn_port">
+            <select id="cdn_port" class="tight">
               <option value="443" selected>443</option>
               <option value="2053">2053</option>
               <option value="2083">2083</option>
@@ -249,6 +284,23 @@
         <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。</p>
       </section>
 
+      <section class="card">
+        <h2>⑥ SOCKS5 账号 <span class="tip">仅在①填写 socks5pt 后生效</span></h2>
+        <div class="row">
+          <label>SOCKS5 用户名 <span class="pill">socks5_username</span></label>
+          <input type="text" id="socks5-username" placeholder="默认 user">
+        </div>
+        <div class="row">
+          <label>SOCKS5 密码 <span class="pill">socks5_password</span></label>
+          <div class="ctl">
+            <input type="text" id="socks5-password" placeholder="留空随机生成，或点右侧按钮">
+            <button type="button" class="mini" id="gen-s5pass">生成</button>
+          </div>
+        </div>
+      </section>
+      </div>
+
+      <div class="col">
       <section class="card">
         <h2>④ 全局配置</h2>
         <div class="row">
@@ -288,24 +340,17 @@
       </section>
 
       <section class="card">
-        <h2>⑥ SOCKS5 账号 <span class="tip">仅在①填写 socks5pt 后生效</span></h2>
+        <h2>③ Argo CF 隧道（VLESS + Argo）<span class="tip">默认不启用；与②互相独立</span></h2>
         <div class="row">
-          <label>SOCKS5 用户名 <span class="pill">socks5_username</span></label>
-          <input type="text" id="socks5-username" placeholder="默认 user">
-        </div>
-        <div class="row">
-          <label>SOCKS5 密码 <span class="pill">socks5_password</span></label>
+          <label>启用 Argo <span class="pill">argo</span></label>
           <div class="ctl">
-            <input type="text" id="socks5-password" placeholder="留空随机生成，或点右侧按钮">
-            <button type="button" class="mini" id="gen-s5pass">生成</button>
+            <select id="argo">
+              <option value="" selected>不启用 Argo</option>
+              <option value="vlpt">启用 Argo（VLESS-WS + Argo）</option>
+            </select>
+            <span class="hint-inline">选择启用后再填下方端口</span>
           </div>
         </div>
-      </section>
-      </div>
-
-      <div class="col">
-      <section class="card">
-        <h2>③ Argo CF 隧道（VLESS + Argo）<span class="tip">填写 argo_pt 端口即启用（与②互相独立）</span></h2>
         <div class="row">
           <label>CF 优选域名 <span class="pill">argo_cdn_host</span></label>
           <div class="ctl">
@@ -316,7 +361,7 @@
         <div class="row">
           <label>CDN 转发端口 <span class="pill">argo_cdn_port</span></label>
           <div class="ctl">
-            <select id="argo_cdn_port">
+            <select id="argo_cdn_port" class="tight">
               <option value="443" selected>443</option>
               <option value="2053">2053</option>
               <option value="2083">2083</option>
@@ -342,40 +387,6 @@
         </div>
         <div class="sep"></div>
         <p class="note">Argo 客户端连接地址 = 独立优选域名(<span class="pill">argo_cdn_host</span>):<span class="pill">argo_cdn_port</span>，与 ② VLESS+WS+CDN 互不影响、可单独设置。Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。cloudflared 安装遵循强校验：拿不到官方 SHA256 校验值时默认拒绝安装，绝不以版本自报代替完整性校验。</p>
-      </section>
-
-      <section class="card">
-        <h2>⑤ SNI 配置 <span class="tip">SNI 留空默认 www.apple.com</span></h2>
-        <div class="row">
-          <label>Reality 伪装域名 <span class="pill">vl_sni</span></label>
-          <div class="ctl">
-            <input type="text" id="vl_sni" class="has-pick" placeholder="留空默认 www.apple.com">
-            <select class="pick sni-pick" data-target="vl_sni"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <div class="sep"></div>
-        <div class="row">
-          <label>TUIC SNI <span class="pill">tu_sni</span></label>
-          <div class="ctl">
-            <input type="text" id="tu_sni" class="has-pick" placeholder="留空默认 www.apple.com">
-            <select class="pick sni-pick" data-target="tu_sni"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <div class="row">
-          <label>AnyTLS SNI <span class="pill">any_sni</span></label>
-          <div class="ctl">
-            <input type="text" id="any_sni" class="has-pick" placeholder="留空默认 www.apple.com">
-            <select class="pick sni-pick" data-target="any_sni"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <div class="row">
-          <label>Hysteria2 SNI <span class="pill">hy_sni</span></label>
-          <div class="ctl">
-            <input type="text" id="hy_sni" class="has-pick" placeholder="留空默认 www.apple.com">
-            <select class="pick sni-pick" data-target="hy_sni"><option value="">选择…</option></select>
-          </div>
-        </div>
-        <p class="note"><b>SNI 安全提示：</b>不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI，不确定就留空（内置默认值）。</p>
       </section>
 
       <section class="card">
@@ -559,8 +570,8 @@
     var envs = [];
     // 直连协议端口
     ['vlrt', 'wspt', 'tupt', 'anypt', 'hypt', 'socks5pt'].forEach(function (k) { numEnv(k, k, envs); });
-    // Argo（填写 argo_pt 即启用；argo_cdn_host/argo_cdn_port 独立于 WS-CDN）
-    if (val('argo_pt')) {
+    // Argo（③ 启用开关=vlpt 时才带上；argo_cdn_host/argo_cdn_port 独立于 WS-CDN）
+    if (val('argo') === 'vlpt') {
       numEnv('argo_pt', 'argo_pt', envs);
       envs.push(['argo', "'vlpt'"]);
       strEnv('argo_cdn_host', 'argo_cdn_host', envs);
@@ -602,6 +613,10 @@
   }
 
   /* ---------------- 状态联动 ---------------- */
+  function syncArgo() {
+    var on = val('argo') === 'vlpt';
+    $id('argo_pt').disabled = !on;
+  }
   function syncCert() {
     var custom = val('cert') === 'custom';
     $id('cert_path').disabled = !custom;
@@ -615,7 +630,7 @@
 
   /* ---------------- 事件绑定 ---------------- */
   document.addEventListener('input', function () { regen(); });
-  document.addEventListener('change', function () { syncCert(); syncForm(); regen(); });
+  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); regen(); });
 
   $id('gen-uuid').addEventListener('click', function () { $id('uuid').value = genUuid(); regen(); });
   $id('gen-passwd').addEventListener('click', function () { $id('passwd').value = genPassword(); regen(); });
@@ -699,7 +714,7 @@
     });
   });
 
-  syncCert(); syncForm();
+syncArgo(); syncCert(); syncForm();
   regen();
 })();
 </script>
