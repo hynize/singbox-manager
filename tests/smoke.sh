@@ -170,6 +170,13 @@ json_set_record "${NODES_FILE}" "nws-cdn" '{"protocol":"vless-ws-tls","name":"WS
 json_set_record "${SECRETS_FILE}" "nws-cdn" '{"uuid":"uwsc"}'
 assert_eval_true "WS CDN authority 用优选域名+CDN 端口" 'build_share_link nws-cdn | grep -q "@cdn.example.com:8443"'
 assert_eval_true "WS CDN sni/host 用优选域名" 'build_share_link nws-cdn | grep -q "sni=cdn.example.com&type=ws&host=cdn.example.com"'
+# WS CDN + 自签证书：不得输出 pcs（CDN 模式下客户端面对前置 CDN 的公开证书，固定源站自签指纹必然失败）
+json_set_record "${NODES_FILE}" "nws-cdn-pin" '{"protocol":"vless-ws-tls","name":"WS-CDN-Pin","port":20835,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/p","certificate_mode":"self-signed","ws_mode":"cdn","cdn_port":8443}'
+json_set_record "${SECRETS_FILE}" "nws-cdn-pin" '{"uuid":"uwscp"}'
+ws_cdn_pin_pair="$(ensure_tls_material tag_wscdnpin ws.example.com)"
+json_set_field "${NODES_FILE}" "nws-cdn-pin" "certificate_path" "${ws_cdn_pin_pair%|*}"
+assert_eval_false "WS CDN 自签证书不输出 pcs" 'build_share_link nws-cdn-pin | grep -q "pcs="'
+assert_eval_false "WS CDN 自签证书不输出 allowInsecure" 'build_share_link nws-cdn-pin | grep -q "allowInsecure"'
 # AnyTLS 链接格式（v0.2.22）：insecure=1 + type=tcp&headerType=none
 json_set_record "${NODES_FILE}" "nanytls" '{"protocol":"anytls","name":"AnyTLS","port":20834,"tls_server":"dl.google.com","certificate_mode":"self-signed"}'
 json_set_record "${SECRETS_FILE}" "nanytls" '{"password":"pwany"}'

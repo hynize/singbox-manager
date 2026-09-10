@@ -1359,7 +1359,8 @@ build_share_link() {
     ws_mode="${ws_mode:-direct}"
     cdn_port="${cdn_port:-443}"
     if [ "${ws_mode}" = "cdn" ]; then
-      # CDN 中转模式：客户端连 cdn_host:cdn_port，SNI/Host 走回源域名（默认同连接地址），由前置 CDN 回源到本机。
+      # CDN 中转模式：客户端连 cdn_host:cdn_port，SNI/Host 走回源域名（cdn_sni，默认同连接地址），
+      # 由前置 CDN 根据 SNI/Host 识别并回源到本机。
       if [ -z "${preferred_domain}" ] || [ "${preferred_domain}" = "${DEFAULT_CDN_DOMAIN}" ]; then
         print_warn "WS-TLS 节点 ${tag} 使用默认优选域名 ${DEFAULT_CDN_DOMAIN}：仅当该域名已接入本机前置 CDN 时可用，否则请把 cdn_host 设为你自己的域名或改用 ws_mode=direct 直连。"
       fi
@@ -1372,7 +1373,9 @@ build_share_link() {
         "$uuid" "$host" "$port" \
         "$(url_encode "$host_domain")" "$(url_encode "$host_domain")" "$(url_encode "$ws_path")"
     fi
-    if [ "$cert_mode" = "self-signed" ]; then
+    # 自签证书固定指纹仅在直连模式有意义：客户端直连本机、面对的就是该自签证书。
+    # CDN 模式客户端面对的是前置 CDN（如 Cloudflare）边缘的公开证书，不能固定源站自签指纹，否则必然校验失败。
+    if [ "$cert_mode" = "self-signed" ] && [ "${ws_mode}" != "cdn" ]; then
       # 自签证书固定指纹（新版 Xray/v2rayN 已拒绝 allowInsecure，改用 pinnedPeerCertSha256）；
       # 无证书文件（旧节点）时回退 allowInsecure=1
       fp="$(cert_fingerprint "$(node_value "$tag" "certificate_path")" 2>/dev/null || true)"
