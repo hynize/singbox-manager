@@ -268,7 +268,6 @@ if ! try_acquire_lock; then
 fi
 ensure_log_rotation
 reconcile_state || true
-apply_network_tune
 ensure_singbox
 ensure_argo_nodes
 sanitize_permissions

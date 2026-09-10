@@ -995,6 +995,62 @@ measure_net_bandwidth() {
   return 1
 }
 
+# 应用网络调优 sysctl 集合：逐项写入、写后回读校验，并把配置持久化到 /etc/sysctl.d/
+# 供重启后自动加载（仅 root 且目录可写时）。写失败但键本身不存在（如部分精简内核
+# 缺 tcp_slow_start_after_idle）视为无害；键存在却写失败或回读不符才判失败。
+apply_sysctls() {
+  local buffer_bytes="$1" k v ok=true err=""
+  local -a pairs=(
+    net.core.rmem_max "${buffer_bytes}"
+    net.core.wmem_max "${buffer_bytes}"
+    net.core.default_qdisc fq
+    net.ipv4.tcp_congestion_control bbr
+    net.ipv4.tcp_rmem "4096 87380 ${buffer_bytes}"
+    net.ipv4.tcp_wmem "4096 65536 ${buffer_bytes}"
+    net.ipv4.tcp_limit_output_bytes 4194304
+    net.ipv4.tcp_slow_start_after_idle 0
+  )
+  local i
+  for ((i = 0; i < ${#pairs[@]}; i += 2)); do
+    k="${pairs[i]}"
+    v="${pairs[i + 1]}"
+    if ! sysctl -w "${k}=${v}" >/dev/null 2>&1; then
+      # 键不存在（精简内核）：无害，跳过；键存在但写入被拒：记失败
+      if [ -n "$(sysctl -n "${k}" 2>/dev/null)" ]; then
+        ok=false
+        err="${err}${k} "
+      fi
+    fi
+  done
+
+  # 核心项写后回读校验（这些键所有常规内核均存在）
+  [ "$(sysctl -n net.core.rmem_max 2>/dev/null)" = "${buffer_bytes}" ] || { ok=false; err="${err}rmem_max "; }
+  [ "$(sysctl -n net.core.wmem_max 2>/dev/null)" = "${buffer_bytes}" ] || { ok=false; err="${err}wmem_max "; }
+  [ "$(sysctl -n net.core.default_qdisc 2>/dev/null)" = "fq" ] || { ok=false; err="${err}default_qdisc "; }
+  [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = "bbr" ] || { ok=false; err="${err}tcp_congestion_control "; }
+  [ "$(sysctl -n net.ipv4.tcp_limit_output_bytes 2>/dev/null)" = "4194304" ] || { ok=false; err="${err}tcp_limit_output_bytes "; }
+
+  if [ -d /etc/sysctl.d ] && [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+    {
+      echo "# singbox-manager net_tune（v1.2.1 智能网络调优，重启后自动加载）"
+      echo "net.core.rmem_max=${buffer_bytes}"
+      echo "net.core.wmem_max=${buffer_bytes}"
+      echo "net.core.default_qdisc=fq"
+      echo "net.ipv4.tcp_congestion_control=bbr"
+      echo "net.ipv4.tcp_rmem=4096 87380 ${buffer_bytes}"
+      echo "net.ipv4.tcp_wmem=4096 65536 ${buffer_bytes}"
+      echo "net.ipv4.tcp_limit_output_bytes=4194304"
+      echo "net.ipv4.tcp_slow_start_after_idle=0"
+    } >"/etc/sysctl.d/99-singbox-manager-net-tune.conf" 2>/dev/null
+  fi
+
+  if [ "${ok}" = "true" ]; then
+    print_ok "已应用网络调优：BBR + fq + $((buffer_bytes / 1024 / 1024))MB 缓冲（tcp_limit_output_bytes=4MB、slow_start_after_idle=0），并已持久化到 /etc/sysctl.d/。"
+  else
+    print_warn "net_tune：sysctl 写入/回读校验失败（${err}），可能容器或精简内核限制不可调。"
+  fi
+}
+
 apply_network_tune() {
   net_tune_requested || return 0
   [ "$(id -u 2>/dev/null || echo 1)" = "0" ] || return 0
@@ -1041,15 +1097,7 @@ apply_network_tune() {
   fi
 
   buffer_bytes=$((buffer_mb * 1024 * 1024))
-  sysctl -w net.core.rmem_max="${buffer_bytes}" >/dev/null 2>&1 || true
-  sysctl -w net.core.wmem_max="${buffer_bytes}" >/dev/null 2>&1 || true
-  sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.tcp_rmem="4096 87380 ${buffer_bytes}" >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.tcp_wmem="4096 65536 ${buffer_bytes}" >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.tcp_limit_output_bytes=4194304 >/dev/null 2>&1 || true
-  sysctl -w net.ipv4.tcp_slow_start_after_idle=0 >/dev/null 2>&1 || true
-  print_ok "已应用网络调优：BBR + fq + ${buffer_mb}MB 缓冲（tcp_limit_output_bytes=4MB、slow_start_after_idle=0）。"
+  apply_sysctls "${buffer_bytes}"
 }
 
 has_public_ipv4() {
