@@ -229,6 +229,12 @@ export cert_path="${cpair%|*}"
 export key_path="${cpair#*|}"
 assert_eval_true "custom 证书经环境变量正确导入" 'auto_cert_bundle ctest2 www.bing.com | grep -q "^custom|"'
 unset cert cert_path key_path
+# v1.2.5：cert_b64/key_b64 直接粘贴 PEM 内容（base64）导入
+b64pair="$(ensure_tls_material certb64 www.bing.com)"
+assert_eval_true "cert_b64/key_b64 内容导入为 custom" 'export cert=custom cert_b64="$(base64 -w0 <"${b64pair%|*}")" key_b64="$(base64 -w0 <"${b64pair#*|}")"; auto_cert_bundle ctest3 www.bing.com | grep -q "^custom|"'
+unset cert cert_b64 key_b64
+assert_eval_false "cert_b64 缺 key_b64 回退自签" 'export cert=custom cert_b64="QUJD"; unset key_b64; auto_cert_bundle t_b64miss www.bing.com | grep -q "^custom|"'
+unset cert cert_b64
 
 # --- 状态备份与恢复（含证书，审查 F-02/F-09） ---
 wipe_records

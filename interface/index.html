@@ -293,15 +293,15 @@
             </select>
           </div>
         </div>
-        <div class="row" id="row-ws-cert-path">
-          <label>证书文件路径 <span class="pill">cert_path</span> <b style="color:var(--warn)">必填</b></label>
-          <input type="text" id="ws_cert_path" placeholder="如 /root/origin-ca.pem（需先上传到服务器）">
+        <div class="row" id="row-ws-cert-content">
+          <label>源站证书（PEM） <span class="pill">cert</span> <b style="color:var(--warn)">必填</b></label>
+          <textarea id="ws_cert_content" rows="5" placeholder="粘贴 PEM 证书全文，如：&#10;-----BEGIN CERTIFICATE-----&#10;MIIE...&#10;-----END CERTIFICATE-----"></textarea>
         </div>
-        <div class="row" id="row-ws-key-path">
-          <label>私钥文件路径 <span class="pill">key_path</span> <b style="color:var(--warn)">必填</b></label>
-          <input type="text" id="ws_key_path" placeholder="如 /root/origin-ca.key">
+        <div class="row" id="row-ws-key-content">
+          <label>源站私钥（PEM） <span class="pill">key</span> <b style="color:var(--warn)">必填</b></label>
+          <textarea id="ws_key_content" rows="5" placeholder="粘贴 PEM 私钥全文，如：&#10;-----BEGIN PRIVATE KEY-----&#10;MIIE...&#10;-----END PRIVATE KEY-----"></textarea>
         </div>
-        <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。<br>v1.2.4 采用 <b>CF 证书方案</b>：源站只有 <span class="pill">wspt</span> 一个 TLS inbound，即 <b>统一回源端口</b>；CF SSL 模式设 <b>Full</b>（源站自签证书即可，边缘→源站加密、不校验）或 <b>Full(Strict)</b>（需选 custom 并上传 Cloudflare Origin CA 证书）。回源目标端口建议 <span class="pill">wspt=443</span>；若用其他端口，需在 CF 加 Origin Rule 把 443 改写到你设置的 wspt。</p>
+        <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。<br>v1.2.5 证书方式：选 custom 后<b>直接粘贴</b>源站 PEM 证书/私钥内容，命令自动 base64 编码并在服务器上解码存储（写入托管证书目录）；配 CF SSL=Full(Strict) 时用 Cloudflare Origin CA 证书。默认 self 为自签 99 年（配 CF SSL=Full，无需填证书）。回源目标端口建议 <span class="pill">wspt=443</span>；若用其他端口，需在 CF 加 Origin Rule 把 443 改写到你设置的 wspt。</p>
       </section>
 
       <section class="card">
@@ -485,6 +485,10 @@
 
   /* ---------------- helpers ---------------- */
   function isNum(v) { return /^-?\d+(\.\d+)?$/.test(v); }
+  // PEM 内容转标准 base64（btoa 仅支持 Latin1，先做 UTF-8 编码避免多字节报错）
+  function b64(s) {
+    return btoa(unescape(encodeURIComponent(s)));
+  }
   // sbm 约定：数字裸写，字符串值用英文单引号包裹
   function qv(v) {
     if (v === '') return "''";
@@ -607,8 +611,12 @@
       // 供宿主上全部 TLS 协议使用（配 Cloudflare SSL=Full(Strict)）；self=自签 99 年（配 SSL=Full）
       if (val('ws_cert_mode') === 'custom') {
         envs.push(['cert', "'custom'"]);
-        strEnv('cert_path', 'ws_cert_path', envs);
-        strEnv('key_path', 'ws_key_path', envs);
+        var certPem = val('ws_cert_content') || '';
+        var keyPem = val('ws_key_content') || '';
+        if (certPem && keyPem) {
+          envs.push(['cert_b64', qv(b64(certPem))]);
+          envs.push(['key_b64', qv(b64(keyPem))]);
+        }
       }
     }
     strEnv('tu_sni', 'tu_sni', envs);
@@ -634,10 +642,10 @@
   }
   function syncCert() {
     var custom = val('ws_cert_mode') === 'custom';
-    $id('row-ws-cert-path').style.opacity = custom ? '1' : '.35';
-    $id('row-ws-key-path').style.opacity = custom ? '1' : '.35';
-    $id('ws_cert_path').disabled = !custom;
-    $id('ws_key_path').disabled = !custom;
+    $id('row-ws-cert-content').style.opacity = custom ? '1' : '.35';
+    $id('row-ws-key-content').style.opacity = custom ? '1' : '.35';
+    $id('ws_cert_content').disabled = !custom;
+    $id('ws_key_content').disabled = !custom;
   }
   function syncForm() {
     var form = val('cmd-form') || 'install';

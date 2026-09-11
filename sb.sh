@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="1.2.4"
+SCRIPT_VERSION="1.2.5"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -830,6 +830,23 @@ import_custom_certificate_bundle() {
       return 1
     }
   fi
+  chmod 600 "$cert_file" "$key_file"
+  printf '%s|%s' "$cert_file" "$key_file"
+}
+
+# v1.2.5：从界面粘贴的 PEM 内容（base64）直接写入托管证书目录，无需先上传文件
+import_custom_certificate_content() {
+  local tag="$1"
+  local cert_b64="$2"
+  local key_b64="$3"
+  local cert_file="${CERT_DIR}/${tag}.custom.crt"
+  local key_file="${CERT_DIR}/${tag}.custom.key"
+
+  if [ -z "$cert_b64" ] || [ -z "$key_b64" ]; then
+    return 1
+  fi
+  printf '%s' "$cert_b64" | base64 -d >"$cert_file" || return 1
+  printf '%s' "$key_b64" | base64 -d >"$key_file" || { rm -f "$cert_file"; return 1; }
   chmod 600 "$cert_file" "$key_file"
   printf '%s|%s' "$cert_file" "$key_file"
 }
@@ -1701,13 +1718,26 @@ auto_collect_specs() {
 auto_cert_bundle() {
   local tag="$1"
   local domain="$2"
-  # 局部变量统一 __ 前缀：cert_path/key_path 是环境变量键名，
+  # 局部变量统一 __ 前缀：cert_path/key_path/cert_b64/key_b64 是环境变量键名，
   # 若声明同名局部变量，env_var 的间接引用会命中空的局部变量（bash 动态作用域）
-  local __mode __cert_path __key_path __pair
+  local __mode __cert_path __key_path __cert_b64 __key_b64 __pair
 
   __mode="$(env_var "cert")"
   __mode="${__mode:-self}"
   if [ "${__mode}" = "custom" ]; then
+    # v1.2.5 优先接口粘贴的 PEM 内容（base64），无内容时回退文件路径方式
+    __cert_b64="$(env_var "cert_b64")"
+    __key_b64="$(env_var "key_b64")"
+    if [ -n "$__cert_b64" ] || [ -n "$__key_b64" ]; then
+      if [ -n "$__cert_b64" ] && [ -n "$__key_b64" ] && __pair="$(import_custom_certificate_content "$tag" "$__cert_b64" "$__key_b64")"; then
+        printf 'custom|%s|%s' "${__pair%|*}" "${__pair#*|}"
+        return 0
+      fi
+      print_warn "cert_b64/key_b64 解码失败（无效的 base64 或缺少其一），节点 ${tag} 回退自签证书。"
+      __pair="$(ensure_tls_material "$tag" "$domain")"
+      printf 'self-signed|%s|%s' "${__pair%|*}" "${__pair#*|}"
+      return 0
+    fi
     __cert_path="$(env_var "cert_path")"
     __key_path="$(env_var "key_path")"
     if [ -n "$__cert_path" ] && [ -n "$__key_path" ] && __pair="$(import_custom_certificate_bundle "$tag" "$__cert_path" "$__key_path")"; then
