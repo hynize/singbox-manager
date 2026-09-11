@@ -33,6 +33,7 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `ws_cdn_cf_host` | ws_cdn 共享 CDN 连接地址（专用前缀，覆盖 `cdn_host`） | `cdn_host` |
 | `ws_cdn_cf_pt` | ws_cdn 共享 CDN 转发端口（专用前缀，覆盖 `cdn_port`） | `cdn_port` |
 | `ws_cdn_sni` | **必填**：ws_cdn 回源域名 = 客户端 SNI/Host（默认同连接地址，可单独设真实回源域名） | 连接地址 |
+| `ws_cdn_origin_port` | CDN 回源明文端口（v1.2.3：`ws_mode=cdn` 时源站自动生成无 TLS WS inbound，供 Cloudflare Flexible 回源；若 80 被占用可换端口并加 Origin Rule） | `80` |
 | `ws_cdn_vless_cf_host/ws_cdn_vless_cf_pt/ws_cdn_vless_sni` | VLESS 专属覆盖（优先于 `ws_cdn_*` 共享值） | 共享值 |
 | `confirm_default_cdn=1` | 确知并接受默认优选域名时消除对应警告 | 未设置 |
 | `uuid` | VLESS/TUIC 共用 UUID | 自动生成 |
@@ -43,9 +44,10 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `up_mbps` `down_mbps` | HY2 带宽 | 200 |
 | `socks5_username` `socks5_password` | SOCKS5 账号 | user / 随机 |
 | `net_tune` | 网络内核调优（BBR+fq+缓冲，自动测速优化参数；`0/off/no` 关闭） | 开启 |
-| `net_tune_region` | 自动优化档位：`asia`（保守）或 `overseas`（大缓冲） | `asia` |
+| `net_tune_region` | 自动优化档位：`asia`（保守）或 `overseas`（大缓冲），未设时按实测延迟自动推断（v1.2.3） | 按延迟自动 |
 | `net_tune_bandwidth_mbps` | 显式指定带宽（Mbps），跳过自动测速直接按档位优化 | 自动测速 |
 | `NET_TUNE_SKIP_SPEEDTEST=1` | 跳过自动测速（缺少 speedtest 或网络受限时回退 1000Mbps 档位） | 未设置 |
+| `NET_TUNE_SKIP_CONFIRM=1` | 跳过测速后的交互确认（非交互环境默认跳过） | 交互环境确认 |
 
 ## 命令行
 
@@ -78,7 +80,7 @@ tests/smoke.sh               冒烟测试
 - 交付韧性：sing-box 固定版本 + SHA256（官方 → 本仓库镜像多源回退）；cloudflared 强校验模型——拿不到官方 SHA256 时默认 **fail-closed 拒绝安装**，绝不静默以"版本自报"代替完整性校验；仅当显式设置 `CLOUDFLARED_ALLOW_RUNTIME_VERIFY=1` 才允许降级（弱网机器的明确选择，不推荐用于生产）
 - 低内存：sing-box/cloudflared 按物理内存与 cgroup 上限自动设置 `GOMEMLIMIT` 软上限（防 OOM）；cloudflared 默认 `http2` 模式压内存尖峰；低于 200MB 内存自动提示资源约束
 - 保活：systemd 环境用 service + timer；OpenRC/无 systemd 用 cron + pidfile，cloudflared 异常退出约 1 分钟内自动拉起
-- 智能网络调优（v1.2.0，吸收 Actions-bbr-v3 思路）：默认启用 `BBR + fq` + 收发缓冲，首次运行时**自动测速**（Ookla speedtest 官方 CLI，自包含安装于管理器目录，可 `NET_TUNE_SKIP_SPEEDTEST=1` 跳过）并按带宽档位 + 地区档位（`asia` 保守 / `overseas` 大缓冲）+ **物理内存上限**综合推荐 TCP buffer；结果持久化到 `settings.json`（`net_tune_buffer_mb`/`net_tune_bandwidth_mbps`/`net_tune_region`），watchdog 后续轮次直接沿用不再重复测速；附加 `tcp_limit_output_bytes=4MB`、`tcp_slow_start_after_idle=0`
+- 智能网络调优（v1.2.0，吸收 Actions-bbr-v3 思路）：默认启用 `BBR + fq` + 收发缓冲，首次运行时**自动测速**（Ookla speedtest 官方 CLI，自包含安装于管理器目录，可 `NET_TUNE_SKIP_SPEEDTEST=1` 跳过），同时测速并解析**延迟**（v1.2.3），并按带宽档位 + 地区档位（`asia` 保守 / `overseas` 大缓冲，未显式设置时按延迟自动推断）+ **物理内存上限**综合推荐 TCP buffer；交互环境下测速结果会先给用户**确认/覆写**（网络不佳时测速误差可人工修正，`NET_TUNE_SKIP_CONFIRM=1` 跳过），确认后结果持久化到 `settings.json`（`net_tune_buffer_mb`/`net_tune_bandwidth_mbps`/`net_tune_latency_ms`/`net_tune_region`），watchdog 后续轮次直接沿用不再重复测速；补充 `tcp_limit_output_bytes=4MB`、`tcp_slow_start_after_idle=0`；管理菜单新增 **10. BBR+FQ+缓存设置** 可随时重填带宽/延迟并自动重新应用。
 - 安全：`set -eEuo pipefail`、`umask 077`、secrets/证书/pid 全部 600；分享链接 authority 对 IPv6 正确加方括号（不再先做查询参数编码）；`build_share_link` 局部变量隔离（`fp` 不泄漏到全局）
 - CI：shellcheck / bash -n / shfmt / 冒烟测试 / 可复现 bundle 构建 / 版本与 `worker.js` 一致性门禁
 - 上游版本见 `metadata/upstream.env`

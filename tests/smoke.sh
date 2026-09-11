@@ -348,7 +348,35 @@ assert_eval_true "HY2 限速时写 up_mbps=400" 'jq -e ".up_mbps == 400" "${tmpc
 assert_eval_true "HY2 限速时写 down_mbps=800" 'jq -e ".down_mbps == 800" "${tmpcfg}" >/dev/null'
 rm -f "${tmpcfg}"
 
-# S2：崩溃退避纯函数
+# v1.2.3：CDN 模式附带明文 HTTP WS 回源 inbound（供 CF Flexible 回源，方案 A）
+json_set_record "${NODES_FILE}" "nws-cdnextra" '{"protocol":"vless-ws-tls","name":"WS-CDNX","port":20844,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/x","certificate_mode":"custom","ws_mode":"cdn","cdn_port":443,"ws_cdn_origin_port":80}'
+json_set_record "${SECRETS_FILE}" "nws-cdnextra" '{"uuid":"ux"}'
+tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
+render_inbound_for_tag nws-cdnextra >"${tmpcfg}" 2>/dev/null
+assert_eq "CDN 模式渲染 2 条 inbound（TLS + 明文HTTP）" "2" "$(jq -s "length" "${tmpcfg}")"
+assert_eval_true "CDN 明文HTTP inbound 无 tls" 'jq -s -e ".[1] | (.tls == null) and (.listen_port == 80) and (.transport.path == \"/x\") and (.users[0].uuid == \"ux\")" "${tmpcfg}" >/dev/null'
+assert_eval_true "CDN TLS inbound 带证书" 'jq -s -e ".[0] | .tls.enabled == true" "${tmpcfg}" >/dev/null'
+rm -f "${tmpcfg}"
+
+# v1.2.3：CDN 回源端口与 TLS 端口相同（冲突）时跳说明文HTTP inbound
+json_set_record "${NODES_FILE}" "nws-cdnconflict" '{"protocol":"vless-ws-tls","name":"WS-CDC","port":20845,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/c","certificate_mode":"custom","ws_mode":"cdn","cdn_port":443,"ws_cdn_origin_port":20845}'
+json_set_record "${SECRETS_FILE}" "nws-cdnconflict" '{"uuid":"uc"}'
+tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
+render_inbound_for_tag nws-cdnconflict >"${tmpcfg}" 2>/dev/null
+assert_eq "CDN 回源端口冲突时只渲染 TLS inbound" "1" "$(jq -s "length" "${tmpcfg}")"
+rm -f "${tmpcfg}"
+
+# v1.2.3：direct 模式不附加明文HTTP inbound（回归，防直连被误加端口）
+json_set_record "${NODES_FILE}" "nws-direct2" '{"protocol":"vless-ws-tls","name":"WS-DIR","port":20846,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/d","certificate_mode":"custom","tcp_fast_open":true}'
+json_set_record "${SECRETS_FILE}" "nws-direct2" '{"uuid":"ud"}'
+tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
+render_inbound_for_tag nws-direct2 >"${tmpcfg}" 2>/dev/null
+assert_eq "direct 模式只渲染 1 条 inbound" "1" "$(jq -s "length" "${tmpcfg}")"
+rm -f "${tmpcfg}"
+
+# v1.2.3：auto_add_vless_ws_tls 持久化 ws_cdn_origin_port（默认 80）
+ENV_NAME=SmX ENV_UUID=33333333-4444-5555-6666-777777777777 ENV_WS_MODE=cdn ENV_CDN_HOST=cdn.example.com ENV_WS_CDN_ORIGIN_PORT=8088 auto_add_vless_ws_tls 20847
+assert_eval_true "ws_cdn_origin_port 写入节点记录(8088)" 'jq -e "to_entries[] | select(.value.port == 20847 and .value.ws_mode == \"cdn\" and .value.ws_cdn_origin_port == 8088)" "${NODES_FILE}" >/dev/null'
 assert_eq "退避 delay 第1次" "1" "$(argo_backoff_delay 1)"
 assert_eq "退避 delay 第2次" "2" "$(argo_backoff_delay 2)"
 assert_eq "退避 delay 第3次" "4" "$(argo_backoff_delay 3)"
@@ -385,10 +413,19 @@ cat >"${TEST_ROOT}/speedtest/speedtest" <<'EOF'
 printf '%s\n' "   Speedtest by Ookla 1.2.0"
 printf '%s\n' "Download:   812.34 Mbit/s"
 printf '%s\n' "Upload:   300.78 Mbit/s"
+printf '%s\n' "Latency:    12.34 ms"
 EOF
 ( cd "${TEST_ROOT}/speedtest"; chmod +x speedtest )
 assert_eq "Ookla 测速输出解析 Upload" "300" "$(run_speedtest "${TEST_ROOT}/speedtest/speedtest")"
+assert_eq "Ookla 测速输出解析 带宽+延迟" "300 12" "$(run_speedtest_metrics "${TEST_ROOT}/speedtest/speedtest")"
 assert_eval_true "Ookla 官方 speedtest 识别" 'ls -la "${TEST_ROOT}/speedtest/speedtest" >/dev/null'
+
+# v1.2.3：net_tune 交互确认在非交互环境原样返回（保在线脚本可无人值守）
+assert_eq "确认环节 非交互原样返回" "300 12" "$(NET_TUNE_SKIP_CONFIRM=1 net_tune_confirm_measurement 300 12 asia)"
+assert_eval_true "确认环节 stdin非TTY 原样返回" 'echo "" | net_tune_confirm_measurement 500 20 asia | grep -q "^500 20"'
+assert_eq "延迟推断档位 <150ms→asia" "asia" "$(infer_net_tune_region 80)"
+assert_eq "延迟推断档位 >=150ms→overseas" "overseas" "$(infer_net_tune_region 200)"
+assert_eq "延迟推断档位 空→asia" "asia" "$(infer_net_tune_region "")"
 
 # --- 端到端前置：清空状态 ---
 wipe_records

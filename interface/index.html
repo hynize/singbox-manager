@@ -281,7 +281,14 @@
           <label>CDN 回源域名 <span class="pill">ws_cdn_sni</span> <b style="color:var(--warn)">必填</b></label>
           <input type="text" id="ws_cdn_sni" placeholder="必填：回源域名=SNI/Host（如 ws.example.com）">
         </div>
-        <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。</p>
+        <div class="row">
+          <label>CDN 回源端口 <span class="pill">ws_cdn_origin_port</span></label>
+          <div class="ctl">
+            <input type="text" id="ws_cdn_origin_port" class="port-input" placeholder="默认 80" inputmode="numeric">
+            <span class="hint-inline">源站明文 HTTP WS 端口（CF Flexible 回源，需放行入站）</span>
+          </div>
+        </div>
+        <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。<br>v1.2.3 起 CDN 模式自动在源站生成<b>明文 HTTP WS</b> 回源 inbound（无 TLS，回源端口 <span class="pill">ws_cdn_origin_port</span>，默认 80），配合 Cloudflare SSL 模式 <b>Flexible</b>（关闭 边缘证书校验）即可免自签证书 520 错误；若源站 80 被占用，换成其他端口并添加对应 Origin Rule 即可。</p>
       </section>
 
       <section class="card">
@@ -583,6 +590,7 @@
       strEnv('cdn_host', 'cdn_host', envs);
       strEnv('cdn_port', 'cdn_port', envs);
       strEnv('ws_cdn_sni', 'ws_cdn_sni', envs);
+      if (val('ws_cdn_origin_port')) strEnv('ws_cdn_origin_port', 'ws_cdn_origin_port', envs);
     }
     strEnv('tu_sni', 'tu_sni', envs);
     strEnv('any_sni', 'any_sni', envs);

@@ -975,6 +975,20 @@ run_speedtest() {
   return 1
 }
 
+# 执行一次 Ookla 测速，同时解析 Upload 与 Latency（v1.2.3：延迟用于档位推断与交互确认）。
+# 输出 "upload latency"（upload 取整，latency 不可用为空），upload 解析失败返回非零。
+run_speedtest_metrics() {
+  local bin="$1" out up lat
+  out="$("${bin}" --accept-license --accept-gdpr 2>&1 || true)"
+  up="$(printf '%s' "${out}" | sed -nE 's/.*[Uu]pload:[[:space:]]*([0-9]+(\.[0-9]+)?).*/\1/p' | head -n1)"
+  lat="$(printf '%s' "${out}" | sed -nE 's/.*[Ll]atency:[[:space:]]*([0-9]+(\.[0-9]+)?).*/\1/p' | head -n1)"
+  if [[ "${up}" =~ ^[0-9]+(\.[0-9]+)?$ ]] && ! printf '%s' "${out}" | grep -qi 'FAILED\|error'; then
+    printf '%s %s' "${up%.*}" "${lat%.[0-9]*}"
+    return 0
+  fi
+  return 1
+}
+
 # 自动测速（尽力而为）：找到或安装 Ookla speedtest 后测一次带宽
 measure_net_bandwidth() {
   local bin up
@@ -993,6 +1007,75 @@ measure_net_bandwidth() {
   fi
   [[ "${up}" =~ ^[0-9]+$ ]] && { printf '%s' "${up}"; return 0; }
   return 1
+}
+
+# 自动测速并解析 带宽+延迟（v1.2.3）：输出 "upload latency"，供档位推断与交互确认。
+# 延迟解析失败不影响带宽输出（简称空置）；整体失败返回非零。
+measure_net_metrics() {
+  local bin out up lat
+  if ! bin="$(find_ookla_speedtest)"; then
+    ensure_ookla_speedtest || return 1
+    bin="$(find_ookla_speedtest)" || return 1
+  fi
+  if command_exists timeout; then
+    if [ -n "${NET_TUNE_SPEEDTEST_TIMEOUT:-}" ]; then
+      out="$(timeout "${NET_TUNE_SPEEDTEST_TIMEOUT}" bash -c "$(declare -f run_speedtest_metrics); run_speedtest_metrics '$bin'" 2>/dev/null || true)"
+    else
+      out="$(timeout 90 bash -c "$(declare -f run_speedtest_metrics); run_speedtest_metrics '$bin'" 2>/dev/null || true)"
+    fi
+  else
+    out="$(run_speedtest_metrics "${bin}" 2>/dev/null || true)"
+  fi
+  up="${out%% *}"
+  lat="${out#* }"
+  [[ "${up}" =~ ^[0-9]+$ ]] && { printf '%s %s' "${up}" "${lat}"; return 0; }
+  return 1
+}
+
+# 按延迟推断地区档位（v1.2.3）：延迟 <150ms 视为 asia 保守档，>=150ms 视为 overseas 大缓冲档。
+# 未知延迟回退 asia。用于未显式设置 net_tune_region 时自动推断。
+infer_net_tune_region() {
+  local latency="${1:-}"
+  if [[ "${latency}" =~ ^[0-9]+$ ]] && [ "${latency}" -ge 150 ]; then
+    printf '%s' "overseas"
+  else
+    printf '%s' "asia"
+  fi
+}
+
+# 交互式确认（v1.2.3）：网络不佳时自动测速误差大，测速与延迟出来后给用户确认/覆写的机会。
+# 仅交互式终端（stdin 为 TTY）且 NET_TUNE_SKIP_CONFIRM=1 未设置时启用；否则原样返回。
+# 输出格式："带宽 延迟"（空格分隔），供调用方继续套用档位与 buffer 计算。
+net_tune_confirm_measurement() {
+  local bandwidth="$1" latency="$2" region="$3" cap_mb buffer_mb
+  local answer new_bw new_lat
+  if [ "${SBM_TEST_MODE:-0}" = "1" ] || [ ! -t 0 ] || [ "${NET_TUNE_SKIP_CONFIRM:-0}" = "1" ]; then
+    printf '%s %s' "${bandwidth}" "${latency}"
+    return 0
+  fi
+  cap_mb="$(get_tcp_buffer_cap_mb)"
+  buffer_mb="$(calculate_net_tune_buffer_mb "${bandwidth}" "${region}")"
+  echo
+  print_info "net_tune 自动测速结果：约 ${bandwidth} Mbps${latency:+，延迟约 ${latency} ms}（${region} 档）。"
+  print_info "推荐 TCP 缓冲：${buffer_mb}MB（内存上限 ${cap_mb}MB 内）。"
+  while true; do
+    print_info "如结果与实际不符（网络不佳时自动测速常有误差），可输入  新带宽 新延迟  覆写；直接回车接受。"
+    read -r -p "确认或覆写（格式：带宽 延迟，如 500 120）: " answer || true
+    answer="$(printf '%s' "${answer}" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    if [ -z "${answer}" ]; then
+      break
+    fi
+    new_bw="$(printf '%s' "${answer}" | awk '{print $1}')"
+    new_lat="$(printf '%s' "${answer}" | awk '{print $2}')"
+    if [[ "${new_bw}" =~ ^[0-9]+$ ]] && [ "${new_bw}" -gt 0 ]; then
+      bandwidth="${new_bw}"
+      [[ "${new_lat}" =~ ^[0-9]+$ ]] && latency="${new_lat}"
+      print_ok "已覆写：带宽 ${bandwidth} Mbps，延迟 ${latency:-未测} ms。"
+      break
+    fi
+    print_warn "输入无效，应为两个正整数（带宽 延迟）。"
+  done
+  printf '%s %s' "${bandwidth}" "${latency}"
 }
 
 # 应用网络调优 sysctl 集合：逐项写入、写后回读校验，并把配置持久化到 /etc/sysctl.d/
@@ -1059,12 +1142,14 @@ apply_network_tune() {
   if [ "${SBM_TEST_MODE:-0}" = "1" ]; then
     return 0
   fi
-  local region bandwidth buffer_mb buffer_bytes cap_mb
+  local region bandwidth buffer_mb buffer_bytes cap_mb latency metric region_set
+  local explicit_region
 
-  region="$(manager_env_or_setting "net_tune_region" "asia")"
-  case "${region}" in
-  asia | overseas) : ;;
-  *) region="asia" ;;
+  # 地区档位：显式 net_tune_region 优先；否则首测时按延迟自动推断（v1.2.3）
+  explicit_region="$(manager_env_or_setting "net_tune_region" "")"
+  case "${explicit_region}" in
+  asia | overseas) region="${explicit_region}" ;;
+  *) region="" ;;
   esac
 
   buffer_mb="$(get_setting "net_tune_buffer_mb")"
@@ -1072,27 +1157,47 @@ apply_network_tune() {
   if [ -n "${buffer_mb}" ] && [[ "${buffer_mb}" =~ ^[0-9]+$ ]]; then
     : # 沿用已测速并持久化的 buffer
   else
-    # 首次运行：优先显式带宽，否则自动测速，再按档位换算 buffer 并持久化
+    # 首次运行：优先显式带宽，否则自动测速（含延迟），再按档位换算 buffer 并持久化
     bandwidth="${bandwidth:-}"
     if [ -z "${bandwidth}" ]; then
       bandwidth="$(env_var "net_tune_bandwidth_mbps")"
     fi
+    latency=""
     if [ -n "${bandwidth}" ] && [[ "${bandwidth}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
       : # 用户给定带宽，跳过测速
     elif [ -z "${NET_TUNE_SKIP_SPEEDTEST:-}" ]; then
       print_ok "net_tune：正在自动测速以智能优化 TCP 缓冲（首次运行，可 NET_TUNE_SKIP_SPEEDTEST=1 跳过）..."
-      bandwidth="$(measure_net_bandwidth)" && print_ok "自动测速完成：约 ${bandwidth} Mbit/s。" || {
+      if metric="$(measure_net_metrics)"; then
+        bandwidth="${metric%% *}"
+        latency="${metric#* }"
+        # 档位未显式设置时按延迟自动推断（延迟未知回退 asia）
+        if [ -z "${region}" ]; then
+          region="$(infer_net_tune_region "${latency}")"
+          region_set="yes"
+        fi
+        # 交互确认：网络不佳时测速/延迟误差大，允许人工覆写（仅交互式终端）
+        metric="$(net_tune_confirm_measurement "${bandwidth}" "${latency}" "${region}")"
+        bandwidth="${metric%% *}"
+        latency="${metric#* }"
+        # 覆写后若档位为自动推断值，则按最新延迟重推
+        if [ "${region_set:-}" = "yes" ]; then
+          region="$(infer_net_tune_region "${latency}")"
+        fi
+        print_ok "net_tune：测速结果 带宽约 ${bandwidth} Mbit/s${latency:+、延迟约 ${latency} ms}（${region} 档）。"
+      else
         print_warn "自动测速不可用（缺少 speedtest 或网络受限），按带宽 1000Mbps 档位优化。"
         bandwidth="1000"
-      }
+      fi
     else
       bandwidth="1000"
     fi
+    [ -z "${region}" ] && region="asia"
     cap_mb="$(get_tcp_buffer_cap_mb)"
     buffer_mb="$(calculate_net_tune_buffer_mb "${bandwidth}" "${region}")"
     set_setting "net_tune_bandwidth_mbps" "${bandwidth}"
-    set_setting "net_tune_buffer_mb" "${buffer_mb}"
+    set_setting "net_tune_latency_ms" "${latency:-}"
     set_setting "net_tune_region" "${region}"
+    set_setting "net_tune_buffer_mb" "${buffer_mb}"
     print_ok "net_tune：带宽约 ${bandwidth} Mbps（${region} 档），内存上限 ${cap_mb}MB，推荐 TCP 缓冲 ${buffer_mb}MB。"
   fi
 
