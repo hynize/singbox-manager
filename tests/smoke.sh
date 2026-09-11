@@ -348,25 +348,25 @@ assert_eval_true "HY2 限速时写 up_mbps=400" 'jq -e ".up_mbps == 400" "${tmpc
 assert_eval_true "HY2 限速时写 down_mbps=800" 'jq -e ".down_mbps == 800" "${tmpcfg}" >/dev/null'
 rm -f "${tmpcfg}"
 
-# v1.2.3：CDN 模式附带明文 HTTP WS 回源 inbound（供 CF Flexible 回源，方案 A）
+# v1.2.4：CDN 模式采用 CF 证书方案（Full/Full-Strict 回源）——源站仅渲染 TLS WS inbound（wspt 统一单端口），
+# 旧 ws_cdn_origin_port（明文 HTTP 回源）已废弃：即使节点记录里残留该字段也忽略，不再追加明文 inbound。
 json_set_record "${NODES_FILE}" "nws-cdnextra" '{"protocol":"vless-ws-tls","name":"WS-CDNX","port":20844,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/x","certificate_mode":"custom","ws_mode":"cdn","cdn_port":443,"ws_cdn_origin_port":80}'
 json_set_record "${SECRETS_FILE}" "nws-cdnextra" '{"uuid":"ux"}'
 tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
 render_inbound_for_tag nws-cdnextra >"${tmpcfg}" 2>/dev/null
-assert_eq "CDN 模式渲染 2 条 inbound（TLS + 明文HTTP）" "2" "$(jq -s "length" "${tmpcfg}")"
-assert_eval_true "CDN 明文HTTP inbound 无 tls" 'jq -s -e ".[1] | (.tls == null) and (.listen_port == 80) and (.transport.path == \"/x\") and (.users[0].uuid == \"ux\")" "${tmpcfg}" >/dev/null'
-assert_eval_true "CDN TLS inbound 带证书" 'jq -s -e ".[0] | .tls.enabled == true" "${tmpcfg}" >/dev/null'
+assert_eq "CDN 模式(CF证书)只渲染 1 条 TLS inbound" "1" "$(jq -s "length" "${tmpcfg}")"
+assert_eval_true "CDN TLS inbound 带证书且监听 wspt" 'jq -s -e ".[0] | (.tls.enabled == true) and (.listen_port == 20844) and (.transport.path == \"/x\") and (.users[0].uuid == \"ux\")" "${tmpcfg}" >/dev/null'
 rm -f "${tmpcfg}"
 
-# v1.2.3：CDN 回源端口与 TLS 端口相同（冲突）时跳说明文HTTP inbound
+# v1.2.4：CDN 仅 TLS inbound 时不产生端口冲突问题（单端口即 wspt 本身）
 json_set_record "${NODES_FILE}" "nws-cdnconflict" '{"protocol":"vless-ws-tls","name":"WS-CDC","port":20845,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/c","certificate_mode":"custom","ws_mode":"cdn","cdn_port":443,"ws_cdn_origin_port":20845}'
 json_set_record "${SECRETS_FILE}" "nws-cdnconflict" '{"uuid":"uc"}'
 tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
 render_inbound_for_tag nws-cdnconflict >"${tmpcfg}" 2>/dev/null
-assert_eq "CDN 回源端口冲突时只渲染 TLS inbound" "1" "$(jq -s "length" "${tmpcfg}")"
+assert_eq "CDN 模式忽略残留 ws_cdn_origin_port 仍只 1 条 inbound" "1" "$(jq -s "length" "${tmpcfg}")"
 rm -f "${tmpcfg}"
 
-# v1.2.3：direct 模式不附加明文HTTP inbound（回归，防直连被误加端口）
+# v1.2.4：direct 模式不渲染 CDN 相关端口（回归，防直连被误加端口）
 json_set_record "${NODES_FILE}" "nws-direct2" '{"protocol":"vless-ws-tls","name":"WS-DIR","port":20846,"preferred_domain":"cdn.example.com","host_domain":"ws.example.com","ws_path":"/d","certificate_mode":"custom","tcp_fast_open":true}'
 json_set_record "${SECRETS_FILE}" "nws-direct2" '{"uuid":"ud"}'
 tmpcfg="$(mktemp "${TEST_ROOT}/cfg.XXXXXX")"
@@ -374,9 +374,10 @@ render_inbound_for_tag nws-direct2 >"${tmpcfg}" 2>/dev/null
 assert_eq "direct 模式只渲染 1 条 inbound" "1" "$(jq -s "length" "${tmpcfg}")"
 rm -f "${tmpcfg}"
 
-# v1.2.3：auto_add_vless_ws_tls 持久化 ws_cdn_origin_port（默认 80）
+# v1.2.4：auto_add_vless_ws_tls 持久化 cdn_sni/CDN 端口，不再写 ws_cdn_origin_port
 ENV_NAME=SmX ENV_UUID=33333333-4444-5555-6666-777777777777 ENV_WS_MODE=cdn ENV_CDN_HOST=cdn.example.com ENV_WS_CDN_ORIGIN_PORT=8088 auto_add_vless_ws_tls 20847
-assert_eval_true "ws_cdn_origin_port 写入节点记录(8088)" 'jq -e "to_entries[] | select(.value.port == 20847 and .value.ws_mode == \"cdn\" and .value.ws_cdn_origin_port == 8088)" "${NODES_FILE}" >/dev/null'
+assert_eval_true "节点记录含 cdn_sni=cdn.example.com" 'jq -e "to_entries[] | select(.value.port == 20847 and .value.ws_mode == \"cdn\" and .value.cdn_sni == \"cdn.example.com\")" "${NODES_FILE}" >/dev/null'
+assert_eval_false "节点记录不再含 ws_cdn_origin_port" 'jq -e "to_entries[] | select(.value.port == 20847) | .value.ws_cdn_origin_port" "${NODES_FILE}" >/dev/null'
 assert_eq "退避 delay 第1次" "1" "$(argo_backoff_delay 1)"
 assert_eq "退避 delay 第2次" "2" "$(argo_backoff_delay 2)"
 assert_eq "退避 delay 第3次" "4" "$(argo_backoff_delay 3)"
@@ -462,6 +463,7 @@ export name=HK uuid=11111111-2222-3333-4444-555555555555 passwd=testpw
 export cdn_host=cdn.example.com ws_host=ws.example.com ws_path=/wspath
 export vl_sni=www.apple.com tu_sni=tu.example.com any_sni=any.example.com hy_sni=hy.example.com
 export up_mbps=100 down_mbps=300 socks5_username=u1 socks5_password=p1
+export NET_TUNE_SKIP_SPEEDTEST=1 NET_TUNE_SKIP_CONFIRM=1
 
 assert_eval_true "一键安装 6 协议成功" '( auto_install ins )'
 assert_eq "一键安装写入 6 个节点" "6" "$(jq length "${NODES_FILE}")"

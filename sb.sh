@@ -4,7 +4,7 @@ set -eEuo pipefail
 umask 077
 
 PROJECT_NAME="Singbox 管理器"
-SCRIPT_VERSION="1.2.3"
+SCRIPT_VERSION="1.2.4"
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
 
@@ -1013,7 +1013,7 @@ express_restart() { :; }
   render_inbound_for_tag() {
   local tag="$1"
   local protocol name port uuid password cert_file key_file ws_path reality_server tcp_fast_open
-  local up_mbps down_mbps bbr_profile ws_cdn_origin_port
+  local up_mbps down_mbps bbr_profile
   local __tfo
 
   protocol="$(node_value "$tag" "protocol")"
@@ -1061,7 +1061,8 @@ express_restart() { :; }
     ws_path="$(node_value "$tag" "ws_path")"
     cert_file="$(node_value "$tag" "certificate_path")"
     key_file="$(node_value "$tag" "key_path")"
-    # 主 inbound：TLS 端口（客户端连接 CDN 或直连），保留原 8443 TLS 语义
+    # 主 inbound：TLS 端口（v1.2.4 起 CDN 模式统一单端口：客户端连 CDN 边缘，CF 按 SSL 模式
+    # Full/Full(Strict) 以 HTTPS 回源到本 TLS 端口，无需明文回源 inbound）。
     jq -n \
       --arg tag "$tag" \
       --arg name "$name" \
@@ -1084,33 +1085,6 @@ express_restart() { :; }
           },
           transport: { type: "ws", path: $ws_path, max_early_data: 2048, early_data_header_name: "Sec-WebSocket-Protocol" }
         }'
-    if [ "$(node_value "$tag" "ws_mode")" = "cdn" ]; then
-      # CDN 模式附带纯 HTTP（无 TLS）WS inbound：供前置 CDN（如 Cloudflare Flexible）
-      # 以明文回源到源站某端口，免自签证书校验（即"方案 A / argosbx 同款 CDN 实现"）。
-      # 端口可经节点字段 ws_cdn_origin_port（环境变量 ws_cdn_origin_port）配置，默认 80。
-      ws_cdn_origin_port="$(node_value "$tag" "ws_cdn_origin_port")"
-      ws_cdn_origin_port="${ws_cdn_origin_port:-${ENV_WS_CDN_ORIGIN_PORT:-80}}"
-      # 与主 inbound 端口重复时跳过，避免端口冲突（进程绑定失败）
-      if [ "${ws_cdn_origin_port}" != "${port}" ]; then
-        jq -n \
-          --arg tag "vless-ws-cdn-http" \
-          --arg name "$name" \
-          --arg uuid "$uuid" \
-          --arg ws_path "$ws_path" \
-          --argjson port "${ws_cdn_origin_port}" \
-          --argjson tfo "${__tfo}" '{
-              type: "vless",
-              tag: $tag,
-              listen: "::",
-              listen_port: $port,
-              tcp_fast_open: $tfo,
-              users: [{ name: $name, uuid: $uuid }],
-              transport: { type: "ws", path: $ws_path, max_early_data: 2048, early_data_header_name: "Sec-WebSocket-Protocol" }
-            }'
-      else
-        print_warn "WS-TLS(CDN) ${tag}：纯 HTTP 回源端口与 TLS 端口(${port})相同，已跳过附加 CDN 回源 inbound。"
-      fi
-    fi
     ;;
   anytls)
     password="$(secret_value "$tag" "password")"
@@ -1800,7 +1774,7 @@ auto_add_vless_reality() {
 
 auto_add_vless_ws_tls() {
   local port="$1"
-  local tag name uuid preferred_domain host_domain ws_path cert_bundle cert_mode cert_file key_file node_json secret_json ws_mode cdn_port cdn_sni ws_cdn_origin_port
+  local tag name uuid preferred_domain host_domain ws_path cert_bundle cert_mode cert_file key_file node_json secret_json ws_mode cdn_port cdn_sni
   tag="$(generate_tag "vless-ws-tls")"
   if [ -n "${ENV_NAME}" ]; then name="${ENV_NAME}-WS-TLS"; else name="VLESS-WS-TLS"; fi
   uuid="${ENV_UUID:-$(generate_uuid)}"
@@ -1809,12 +1783,6 @@ auto_add_vless_ws_tls() {
   host_domain="${ENV_WS_HOST:-${DEFAULT_TLS_SERVER}}"
   ws_path="${ENV_WS_PATH:-$(random_ws_path)}"
   ws_mode="${ENV_WS_MODE:-direct}"
-  # CDN 回源明文端口（v1.2.3：ws_mode=cdn 时额外渲染无 TLS WS inbound，供 Cloudflare Flexible 回源）
-  ws_cdn_origin_port="${ENV_WS_CDN_ORIGIN_PORT:-80}"
-  if [[ ! "${ws_cdn_origin_port}" =~ ^[0-9]+$ ]] || [ "${ws_cdn_origin_port}" -lt 1 ] || [ "${ws_cdn_origin_port}" -gt 65535 ]; then
-    print_warn "ws_cdn_origin_port=${ws_cdn_origin_port} 非法，回退 80。"
-    ws_cdn_origin_port=80
-  fi
   # CDN 端口：脚本专用 > 共享 > 兼容旧名 cdn_port > 443
   cdn_port="${ENV_WS_CDN_VLESS_CF_PT:-${ENV_WS_CDN_CF_PT:-${ENV_CDN_PORT:-443}}}"
   # CDN 回源域名/SNI（仅 cdn 模式使用）：脚本专用 > 共享 > 内置默认（= 连接地址，与 jyucoeng 语义一致）
@@ -1845,7 +1813,6 @@ auto_add_vless_ws_tls() {
     --arg ws_path "$ws_path" \
     --arg ws_mode "$ws_mode" \
     --argjson cdn_port "$cdn_port" \
-    --argjson ws_cdn_origin_port "$ws_cdn_origin_port" \
     --arg cdn_sni "$cdn_sni" \
     --arg certificate_mode "$cert_mode" \
     --arg certificate_path "$cert_file" \
@@ -1858,7 +1825,6 @@ auto_add_vless_ws_tls() {
       ws_path: $ws_path,
       ws_mode: $ws_mode,
       cdn_port: $cdn_port,
-      ws_cdn_origin_port: $ws_cdn_origin_port,
       cdn_sni: $cdn_sni,
       certificate_mode: $certificate_mode,
       certificate_path: $certificate_path,
@@ -2225,8 +2191,9 @@ auto_install() {
   ENV_WS_CDN_VLESS_CF_HOST="$(env_domain_or_default "ws_cdn_vless_cf_host" "")"
   ENV_WS_CDN_VLESS_CF_PT="$(env_var "ws_cdn_vless_cf_pt")"
   ENV_WS_CDN_VLESS_SNI="$(env_domain_or_default "ws_cdn_vless_sni" "")"
-  # v1.2.3：CDN 回源明文端口（仅 cdn 模式生效），默认 80，供 Cloudflare Flexible 回源
-  ENV_WS_CDN_ORIGIN_PORT="$(env_var "ws_cdn_origin_port")"
+  # v1.2.4：CDN 采 CF 证书方案（Full/Full-Strict 回源），源站仅一个 TLS WS inbound（wspt），
+  # 不再生成明文 HTTP 回源 inbound；ws_cdn_origin_port 已废弃。证书方式支持
+  # cert=custom（如 Cloudflare Origin CA 证书）+ cert_path/key_path，自签默认适用于 Full 模式。
   # 默认优选域名仅在 ws_mode=cdn（CDN 中转）时要求本机已接入前置 CDN；直连模式（默认）不依赖 cdn_host
   if [ "${ENV_CDN_HOST}" = "${DEFAULT_CDN_DOMAIN}" ] && [ "${ENV_WS_MODE:-direct}" = "cdn" ] && [ "${confirm_default_cdn:-}" != "1" ]; then
     print_warn "⚠️ 未设置有效 cdn_host：WS-TLS(CDN 中转) 节点将使用内置优选域名 ${DEFAULT_CDN_DOMAIN}（仅该域名已接入本机前置 CDN 时可达）。"

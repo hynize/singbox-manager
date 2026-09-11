@@ -33,7 +33,8 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `ws_cdn_cf_host` | ws_cdn 共享 CDN 连接地址（专用前缀，覆盖 `cdn_host`） | `cdn_host` |
 | `ws_cdn_cf_pt` | ws_cdn 共享 CDN 转发端口（专用前缀，覆盖 `cdn_port`） | `cdn_port` |
 | `ws_cdn_sni` | **必填**：ws_cdn 回源域名 = 客户端 SNI/Host（默认同连接地址，可单独设真实回源域名） | 连接地址 |
-| `ws_cdn_origin_port` | CDN 回源明文端口（v1.2.3：`ws_mode=cdn` 时源站自动生成无 TLS WS inbound，供 Cloudflare Flexible 回源；若 80 被占用可换端口并加 Origin Rule） | `80` |
+| `cert` | 源站证书方式：`self`（自签 99 年，配 Cloudflare SSL=Full）/ `custom`（Cloudflare Origin CA 或有效证书，配 SSL=Full(Strict)） | `self` |
+| `cert_path` `key_path` | `cert=custom` 时源站证书/私钥文件路径（先上传到服务器） | 自签路径 |
 | `ws_cdn_vless_cf_host/ws_cdn_vless_cf_pt/ws_cdn_vless_sni` | VLESS 专属覆盖（优先于 `ws_cdn_*` 共享值） | 共享值 |
 | `confirm_default_cdn=1` | 确知并接受默认优选域名时消除对应警告 | 未设置 |
 | `uuid` | VLESS/TUIC 共用 UUID | 自动生成 |
@@ -48,6 +49,25 @@ vlrt=2083 hypt=2082 name='HK' sbm rep      # 已安装时
 | `net_tune_bandwidth_mbps` | 显式指定带宽（Mbps），跳过自动测速直接按档位优化 | 自动测速 |
 | `NET_TUNE_SKIP_SPEEDTEST=1` | 跳过自动测速（缺少 speedtest 或网络受限时回退 1000Mbps 档位） | 未设置 |
 | `NET_TUNE_SKIP_CONFIRM=1` | 跳过测速后的交互确认（非交互环境默认跳过） | 交互环境确认 |
+
+## WS-TLS + CDN（CF 证书方案，v1.2.4）
+
+v1.2.4 起 WS-TLS 的 CDN 中转采用 **Cloudflare 证书方案**：源站只有一个 TLS WS inbound（端口 `wspt`），即**统一的回源端口**，不再生成明文 HTTP 回源 inbound、不再依赖 nginx。Cloudflare 边缘 SSL 模式设为 **Full** 或 **Full(Strict)**，以 HTTPS 回源到该 TLS 端口。
+
+- **Full（推荐，默认 `cert=self`）**：源站用内置自签证书（99 年）即可，Cloudflare 边缘→源站全程加密但**不校验**源站证书，无需任何额外文件。
+- **Full(Strict)**：Cloudflare 会校验源站证书，需选 `cert=custom` 并把 **Cloudflare Origin CA 证书**（DNS 控制台 SSL/TLS → Origin Server → Create Certificate 生成）上传到服务器，再填 `cert_path`/`key_path`。
+
+端口关系：客户端连 `cdn_host:cdn_port`（443/2053/2083/2087/2096/8443），SNI/Host 用**必填**的 `ws_cdn_sni`；Cloudflare 收到回源域名后按 SSL 模式把请求以 HTTPS 转发到源站。回源默认目标是 **443**，故建议直接设 `wspt=443`（此时 `wspt` 即统一端口）；若 `wspt` 用其他值，需在 Cloudflare 控制台为该域名添加 **Origin Rule**，把 443 改写为你的 `wspt`。
+
+```bash
+# 示例：CDN 中转，Full 模式（自签证书，零额外准备）
+wspt=443 cdn_host=你的优选域名 cdn_port=443 ws_cdn_sni=ws.example.com name='HK' bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/latest/download/install.sh)
+
+# 示例：CDN 中转，Full(Strict)（Cloudflare Origin CA 证书）
+wspt=443 cdn_host=你的优选域名 ws_cdn_sni=ws.example.com cert=custom cert_path=/root/origin-ca.pem key_path=/root/origin-ca.key name='HK' bash <(curl -fsSL https://github.com/hynize/singbox-manager/releases/latest/download/install.sh)
+```
+
+> 兼容性：v1.2.3 遗留的 `ws_cdn_origin_port`（明文 HTTP 回源 inbound）已废弃，升级后源站自动只保留 TLS inbound；已部署的 Cloudflare SSL 模式请从 **Flexible** 改为 Full/Full(Strict)，否则回源到 80 将无法工作。
 
 ## 命令行
 
@@ -80,7 +100,8 @@ tests/smoke.sh               冒烟测试
 - 交付韧性：sing-box 固定版本 + SHA256（官方 → 本仓库镜像多源回退）；cloudflared 强校验模型——拿不到官方 SHA256 时默认 **fail-closed 拒绝安装**，绝不静默以"版本自报"代替完整性校验；仅当显式设置 `CLOUDFLARED_ALLOW_RUNTIME_VERIFY=1` 才允许降级（弱网机器的明确选择，不推荐用于生产）
 - 低内存：sing-box/cloudflared 按物理内存与 cgroup 上限自动设置 `GOMEMLIMIT` 软上限（防 OOM）；cloudflared 默认 `http2` 模式压内存尖峰；低于 200MB 内存自动提示资源约束
 - 保活：systemd 环境用 service + timer；OpenRC/无 systemd 用 cron + pidfile，cloudflared 异常退出约 1 分钟内自动拉起
-- 智能网络调优（v1.2.0，吸收 Actions-bbr-v3 思路）：默认启用 `BBR + fq` + 收发缓冲，首次运行时**自动测速**（Ookla speedtest 官方 CLI，自包含安装于管理器目录，可 `NET_TUNE_SKIP_SPEEDTEST=1` 跳过），同时测速并解析**延迟**（v1.2.3），并按带宽档位 + 地区档位（`asia` 保守 / `overseas` 大缓冲，未显式设置时按延迟自动推断）+ **物理内存上限**综合推荐 TCP buffer；交互环境下测速结果会先给用户**确认/覆写**（网络不佳时测速误差可人工修正，`NET_TUNE_SKIP_CONFIRM=1` 跳过），确认后结果持久化到 `settings.json`（`net_tune_buffer_mb`/`net_tune_bandwidth_mbps`/`net_tune_latency_ms`/`net_tune_region`），watchdog 后续轮次直接沿用不再重复测速；补充 `tcp_limit_output_bytes=4MB`、`tcp_slow_start_after_idle=0`；管理菜单新增 **10. BBR+FQ+缓存设置** 可随时重填带宽/延迟并自动重新应用。
+- WS-TLS CDN 证书方案（v1.2.4）：CDN 中转统一单端口（`wspt`=回源端口），Cloudflare SSL 用 Full/Full(Strict) 以 HTTPS 回源；`cert=self` 自签即可支持 Full，`cert=custom`+`cert_path`/`key_path` 供 Full(Strict) 用 Cloudflare Origin CA 证书；已废弃 `ws_cdn_origin_port` 明文回源。
+- 智能网络调优（v1.2.0，吸收 Actions-bbr-v3 思路）：默认启用 `BBR + fq` + 收发缓冲，首次运行时**自动测速**（Ookla speedtest 官方 CLI，自包含安装于管理器目录，可 `NET_TUNE_SKIP_SPEEDTEST=1` 跳过），同时测速并解析**延迟**（v1.2.3），并按带宽档位 + 地区档位（`asia` 保守 / `overseas` 大缓冲，未显式设置时按延迟自动推断）+ **物理内存上限**综合推荐 TCP buffer；交互环境下测速结果会先给用户**确认/覆写**（`NET_TUNE_SKIP_CONFIRM=1` 跳过），确认后结果持久化到 `settings.json`，watchdog 后续轮次直接沿用不再重复测速；补充 `tcp_limit_output_bytes=4MB`、`tcp_slow_start_after_idle=0`；管理菜单新增 **10. BBR+FQ+缓存设置** 可随时重填带宽/延迟并自动重新应用。
 - 安全：`set -eEuo pipefail`、`umask 077`、secrets/证书/pid 全部 600；分享链接 authority 对 IPv6 正确加方括号（不再先做查询参数编码）；`build_share_link` 局部变量隔离（`fp` 不泄漏到全局）
 - CI：shellcheck / bash -n / shfmt / 冒烟测试 / 可复现 bundle 构建 / 版本与 `worker.js` 一致性门禁
 - 上游版本见 `metadata/upstream.env`

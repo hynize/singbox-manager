@@ -1055,12 +1055,12 @@ net_tune_confirm_measurement() {
   fi
   cap_mb="$(get_tcp_buffer_cap_mb)"
   buffer_mb="$(calculate_net_tune_buffer_mb "${bandwidth}" "${region}")"
-  echo
-  print_info "net_tune 自动测速结果：约 ${bandwidth} Mbps${latency:+，延迟约 ${latency} ms}（${region} 档）。"
-  print_info "推荐 TCP 缓冲：${buffer_mb}MB（内存上限 ${cap_mb}MB 内）。"
+  echo >&2
+  print_info "net_tune 自动测速结果：约 ${bandwidth} Mbps${latency:+，延迟约 ${latency} ms}（${region} 档）。" >&2
+  print_info "推荐 TCP 缓冲：${buffer_mb}MB（内存上限 ${cap_mb}MB 内）。" >&2
   while true; do
-    print_info "如结果与实际不符（网络不佳时自动测速常有误差），可输入  新带宽 新延迟  覆写；直接回车接受。"
-    read -r -p "确认或覆写（格式：带宽 延迟，如 500 120）: " answer || true
+    print_info "网络不佳时自动测速常有误差，可输入  新带宽 新延迟  覆写。" >&2
+    read -r -p "直接回车确认，或输入新值（格式：带宽 延迟，如 500 120）: " answer || true
     answer="$(printf '%s' "${answer}" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
     if [ -z "${answer}" ]; then
       break
@@ -1070,7 +1070,7 @@ net_tune_confirm_measurement() {
     if [[ "${new_bw}" =~ ^[0-9]+$ ]] && [ "${new_bw}" -gt 0 ]; then
       bandwidth="${new_bw}"
       [[ "${new_lat}" =~ ^[0-9]+$ ]] && latency="${new_lat}"
-      print_ok "已覆写：带宽 ${bandwidth} Mbps，延迟 ${latency:-未测} ms。"
+      print_ok "已覆写：带宽 ${bandwidth} Mbps，延迟 ${latency:-未测} ms。" >&2
       break
     fi
     print_warn "输入无效，应为两个正整数（带宽 延迟）。"

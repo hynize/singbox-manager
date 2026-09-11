@@ -5,10 +5,10 @@ umask 077
 
 REPO_OWNER="hynize"
 REPO_NAME="singbox-manager"
-PROJECT_VERSION="v1.2.3"
-PACKAGE_NAME="singbox-manager-v1.2.3.tar.gz"
+PROJECT_VERSION="v1.2.4"
+PACKAGE_NAME="singbox-manager-v1.2.4.tar.gz"
 # 发布流程：scripts/build-release-bundle.sh 构建可复现 bundle，其 SHA256 与此处一致
-PACKAGE_SHA256="9229aeeee8478b34c1ad7f3cffa702525a3ec6d3ce339ffc22db24f691f5a048"
+PACKAGE_SHA256="6cad69946c2d966b463388c009f7ee8b4a0cfdd36eb4dee4696530af3c05f7c9"
 PACKAGE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${PROJECT_VERSION}/${PACKAGE_NAME}"
 
 INSTALL_BIN="/usr/local/bin/sbm"

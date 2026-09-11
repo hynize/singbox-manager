@@ -254,7 +254,10 @@
         <h2>⑤ VLESS+WS+CDN <span class="tip">填写 wspt 端口即启用（CDN 中转）</span></h2>
         <div class="row">
           <label>VLESS-WS-TLS 端口 <span class="pill">wspt</span></label>
-          <input type="text" class="port-input" id="wspt" placeholder="如 8443，或点 🎲 随机" inputmode="numeric">
+          <div class="ctl">
+            <input type="text" class="port-input" id="wspt" placeholder="如 443，或点 🎲 随机" inputmode="numeric">
+            <span class="hint-inline">源站 TLS 端口=统一回源端口（CF 证书方案）</span>
+          </div>
         </div>
         <div class="row">
           <label>CF 优选域名 <span class="pill">cdn_host</span></label>
@@ -282,13 +285,23 @@
           <input type="text" id="ws_cdn_sni" placeholder="必填：回源域名=SNI/Host（如 ws.example.com）">
         </div>
         <div class="row">
-          <label>CDN 回源端口 <span class="pill">ws_cdn_origin_port</span></label>
+          <label>源站证书方式 <span class="pill">cert</span></label>
           <div class="ctl">
-            <input type="text" id="ws_cdn_origin_port" class="port-input" placeholder="默认 80" inputmode="numeric">
-            <span class="hint-inline">源站明文 HTTP WS 端口（CF Flexible 回源，需放行入站）</span>
+            <select id="ws_cert_mode" class="tight">
+              <option value="self" selected>self · 自签 99 年（配 CF SSL=Full，无需额外证书）</option>
+              <option value="custom">custom · Cloudflare Origin CA/有效证书（配 CF SSL=Full(Strict)）</option>
+            </select>
           </div>
         </div>
-        <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。<br>v1.2.3 起 CDN 模式自动在源站生成<b>明文 HTTP WS</b> 回源 inbound（无 TLS，回源端口 <span class="pill">ws_cdn_origin_port</span>，默认 80），配合 Cloudflare SSL 模式 <b>Flexible</b>（关闭 边缘证书校验）即可免自签证书 520 错误；若源站 80 被占用，换成其他端口并添加对应 Origin Rule 即可。</p>
+        <div class="row" id="row-ws-cert-path">
+          <label>证书文件路径 <span class="pill">cert_path</span> <b style="color:var(--warn)">必填</b></label>
+          <input type="text" id="ws_cert_path" placeholder="如 /root/origin-ca.pem（需先上传到服务器）">
+        </div>
+        <div class="row" id="row-ws-key-path">
+          <label>私钥文件路径 <span class="pill">key_path</span> <b style="color:var(--warn)">必填</b></label>
+          <input type="text" id="ws_key_path" placeholder="如 /root/origin-ca.key">
+        </div>
+        <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。<br>v1.2.4 采用 <b>CF 证书方案</b>：源站只有 <span class="pill">wspt</span> 一个 TLS inbound，即 <b>统一回源端口</b>；CF SSL 模式设 <b>Full</b>（源站自签证书即可，边缘→源站加密、不校验）或 <b>Full(Strict)</b>（需选 custom 并上传 Cloudflare Origin CA 证书）。回源目标端口建议 <span class="pill">wspt=443</span>；若用其他端口，需在 CF 加 Origin Rule 把 443 改写到你设置的 wspt。</p>
       </section>
 
       <section class="card">
@@ -590,7 +603,13 @@
       strEnv('cdn_host', 'cdn_host', envs);
       strEnv('cdn_port', 'cdn_port', envs);
       strEnv('ws_cdn_sni', 'ws_cdn_sni', envs);
-      if (val('ws_cdn_origin_port')) strEnv('ws_cdn_origin_port', 'ws_cdn_origin_port', envs);
+      // v1.2.4 CF 证书方案：custom=Cloudflare Origin CA/有效证书 → 下发 cert + 证书路径，
+      // 供宿主上全部 TLS 协议使用（配 Cloudflare SSL=Full(Strict)）；self=自签 99 年（配 SSL=Full）
+      if (val('ws_cert_mode') === 'custom') {
+        envs.push(['cert', "'custom'"]);
+        strEnv('cert_path', 'ws_cert_path', envs);
+        strEnv('key_path', 'ws_key_path', envs);
+      }
     }
     strEnv('tu_sni', 'tu_sni', envs);
     strEnv('any_sni', 'any_sni', envs);
@@ -613,6 +632,12 @@
     var on = val('argo') === 'vlpt';
     $id('argo_pt').disabled = !on;
   }
+  function syncCert() {
+    var custom = val('ws_cert_mode') === 'custom';
+    var show = custom && !!val('wspt');
+    $id('row-ws-cert-path').style.display = show ? '' : 'none';
+    $id('row-ws-key-path').style.display = show ? '' : 'none';
+  }
   function syncForm() {
     var form = val('cmd-form') || 'install';
     $id('dl').disabled = form === 'sbm';
@@ -621,7 +646,7 @@
 
   /* ---------------- 事件绑定 ---------------- */
   document.addEventListener('input', function () { regen(); });
-  document.addEventListener('change', function () { syncArgo(); syncForm(); regen(); });
+  document.addEventListener('change', function () { syncArgo(); syncCert(); syncForm(); regen(); });
 
   $id('gen-uuid').addEventListener('click', function () { $id('uuid').value = genUuid(); regen(); });
   $id('gen-passwd').addEventListener('click', function () { $id('passwd').value = genPassword(); regen(); });
