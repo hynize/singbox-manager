@@ -634,9 +634,10 @@
   }
   function syncCert() {
     var custom = val('ws_cert_mode') === 'custom';
-    var show = custom && !!val('wspt');
-    $id('row-ws-cert-path').style.display = show ? '' : 'none';
-    $id('row-ws-key-path').style.display = show ? '' : 'none';
+    $id('row-ws-cert-path').style.opacity = custom ? '1' : '.35';
+    $id('row-ws-key-path').style.opacity = custom ? '1' : '.35';
+    $id('ws_cert_path').disabled = !custom;
+    $id('ws_key_path').disabled = !custom;
   }
   function syncForm() {
     var form = val('cmd-form') || 'install';
@@ -675,6 +676,7 @@
   // 给所有端口输入框追加 🎲 随机端口按钮
   function randPort() { return 10000 + Math.floor(Math.random() * 55536); }
   document.querySelectorAll('input.port-input').forEach(function (inp) {
+    if (inp.closest('.ctl')) return; /* already wrapped (e.g. wspt with hint-inline) */
     var wrap = document.createElement('div');
     wrap.className = 'ctl';
     inp.parentNode.insertBefore(wrap, inp);
