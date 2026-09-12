@@ -103,6 +103,7 @@
     .ctl > button { flex: 0 0 auto; }
     .ctl > input { padding-right: 60px; }
     .ctl > input.has-pick { padding-right: 194px; }
+    .ctl > input.has-hint { padding-right: 210px; }
     .ctl > button.mini {
       position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
       padding: 4px 10px; font-size: 12px;
@@ -181,7 +182,7 @@
       font-size: 13.5px; line-height: 1.55;
     }
     .hint { font-size: 12.5px; color: var(--sub); margin: 8px 0 0; }
-    .hint-inline { position: absolute; right: 44px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--sub); white-space: nowrap; pointer-events: none; max-width: 156px; overflow: hidden; text-overflow: ellipsis; }
+    .hint-inline { position: absolute; right: 50px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--sub); white-space: nowrap; pointer-events: none; max-width: 156px; overflow: hidden; text-overflow: ellipsis; }
 
     footer { margin-top: 26px; text-align: center; font-size: 13px; color: var(--sub); line-height: 1.8; }
   </style>
@@ -255,8 +256,9 @@
         <div class="row">
           <label>VLESS-WS-TLS 端口 <span class="pill">wspt</span></label>
           <div class="ctl">
-            <input type="text" class="port-input" id="wspt" placeholder="如 443，或点 🎲 随机" inputmode="numeric">
+            <input type="text" class="port-input has-hint" id="wspt" placeholder="如 443，或点 🎲 随机" inputmode="numeric">
             <span class="hint-inline">源站 TLS 端口=统一回源端口（CF 证书方案）</span>
+            <button type="button" class="mini" id="rand-wspt" title="填入随机端口（10000-65535）">🎲</button>
           </div>
         </div>
         <div class="row">
@@ -283,14 +285,6 @@
         <div class="row">
           <label>CDN 回源域名 <span class="pill">ws_cdn_sni</span> <b style="color:var(--warn)">必填</b></label>
           <input type="text" id="ws_cdn_sni" placeholder="必填：回源域名=SNI/Host（如 ws.example.com）">
-        </div>
-        <div class="row">
-          <label>源站证书方式 <span class="pill">cert</span></label>
-          <div class="ctl">
-            <select id="ws_cert_mode" class="tight">
-              <option value="custom" selected>custom · Cloudflare Origin CA/有效证书（配 CF SSL=Full(Strict)）</option>
-            </select>
-          </div>
         </div>
         <div class="row" id="row-ws-cert-content">
           <label>源站证书（PEM） <span class="pill">cert</span> <b style="color:var(--warn)">必填</b></label>
@@ -637,13 +631,7 @@
     var on = val('argo') === 'vlpt';
     $id('argo_pt').disabled = !on;
   }
-  function syncCert() {
-    var on = !!val('wspt');
-    $id('row-ws-cert-content').style.opacity = on ? '1' : '.35';
-    $id('row-ws-key-content').style.opacity = on ? '1' : '.35';
-    $id('ws_cert_content').disabled = !on;
-    $id('ws_key_content').disabled = !on;
-  }
+  function syncCert() { /* 证书/私钥行始终可编辑，不做锁定 */ }
   function syncForm() {
     var form = val('cmd-form') || 'install';
     $id('dl').disabled = form === 'sbm';
@@ -698,6 +686,15 @@
     });
     wrap.appendChild(btn);
   });
+
+  // wspt 因带 hint-inline 已手动包裹 .ctl，单独绑定 🎲
+  var wspBtn = $id('rand-wspt');
+  if (wspBtn) {
+    wspBtn.addEventListener('click', function () {
+      $id('wspt').value = randPort();
+      regen();
+    });
+  }
 
   renderCmdList('sbm-cmds', SBM_CMDS);
 
