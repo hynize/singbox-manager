@@ -303,21 +303,6 @@
         </div>
         <p class="note">客户端连接地址 = CF 优选域名(<span class="pill">cdn_host</span>):<span class="pill">cdn_port</span>；SNI/Host 用<b>必填</b>的回源域名 <span class="pill">ws_cdn_sni</span>。SNI 安全提示：不要使用 Cloudflare/Akamai 等代理或 CDN 域名作为 SNI。<br>v1.2.5 证书方式：选 custom 后<b>直接粘贴</b>源站 PEM 证书/私钥内容，命令自动 base64 编码并在服务器上解码存储（写入托管证书目录）；配 CF SSL=Full(Strict) 时用 Cloudflare Origin CA 证书。默认 self 为自签 99 年（配 CF SSL=Full，无需填证书）。回源目标端口建议 <span class="pill">wspt=443</span>；若用其他端口，需在 CF 加 Origin Rule 把 443 改写到你设置的 wspt。</p>
       </section>
-
-      <section class="card">
-        <h2>⑥ SOCKS5 账号 <span class="tip">仅在①填写 socks5pt 后生效</span></h2>
-        <div class="row">
-          <label>SOCKS5 用户名 <span class="pill">socks5_username</span></label>
-          <input type="text" id="socks5-username" placeholder="默认 user">
-        </div>
-        <div class="row">
-          <label>SOCKS5 密码 <span class="pill">socks5_password</span></label>
-          <div class="ctl">
-            <input type="text" id="socks5-password" placeholder="留空随机生成，或点右侧按钮">
-            <button type="button" class="mini" id="gen-s5pass">生成</button>
-          </div>
-        </div>
-      </section>
       </div>
 
       <div class="col">
@@ -399,6 +384,21 @@
         </div>
         <div class="sep"></div>
         <p class="note">Argo 客户端连接地址 = 独立优选域名(<span class="pill">argo_cdn_host</span>):<span class="pill">argo_cdn_port</span>，与 ⑤ VLESS+WS+CDN 互不影响、可单独设置。Argo 支持临时隧道（域名自动分配）与固定隧道（需自备 Cloudflare Tunnel，<b>同时填写 agn + agk</b>，缺一则回退临时隧道）。临时隧道域名会变化，安装后用 <b>sbm list</b> 查看。cloudflared 安装遵循强校验：拿不到官方 SHA256 校验值时默认拒绝安装，绝不以版本自报代替完整性校验。</p>
+      </section>
+
+      <section class="card">
+        <h2>⑥ SOCKS5 账号 <span class="tip">仅在①填写 socks5pt 后生效</span></h2>
+        <div class="row">
+          <label>SOCKS5 用户名 <span class="pill">socks5_username</span></label>
+          <input type="text" id="socks5-username" placeholder="默认 user">
+        </div>
+        <div class="row">
+          <label>SOCKS5 密码 <span class="pill">socks5_password</span></label>
+          <div class="ctl">
+            <input type="text" id="socks5-password" placeholder="留空随机生成，或点右侧按钮">
+            <button type="button" class="mini" id="gen-s5pass">生成</button>
+          </div>
+        </div>
       </section>
 
       <section class="card">
